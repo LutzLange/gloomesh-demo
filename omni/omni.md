@@ -9,8 +9,8 @@ Gloo: An omni-directional solution that covers ingress, service-to-service, and 
 
 Set env vars
 ```bash
-export CLUSTER1=gke_ambient_one
-export CLUSTER2=gke_ambient_two
+export CLUSTER1=llange-cluster1
+export CLUSTER2=llange-cluster2
 export ISTIOCTL=/Users/ramvennam/Downloads/istioctl
 ```
 
