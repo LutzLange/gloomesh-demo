@@ -169,13 +169,23 @@ export ISTIOCTL=$(which istioctl)
 
 ## Deploy Bookinfo sample
 
+This guide uses custom Bookinfo images with **OpenTelemetry instrumentation built-in**. Each service exports traces directly to the Gloo Telemetry Collector via OTLP, providing application-level distributed tracing in addition to mesh-level observability.
+
+| Service | Language | OTel Approach |
+|---------|----------|---------------|
+| productpage | Python | OTel SDK + OTLP Exporter |
+| details | Ruby | OTel SDK + Auto-instrumentation |
+| ratings | Node.js | OTel SDK + Auto-instrumentation |
+| reviews | Java | OTel Java Agent (zero-code) |
+
 ```bash
 for context in ${CLUSTER1} ${CLUSTER2}; do
-  kubectl --context ${context} create ns bookinfo 
-  kubectl --context ${context} apply -n bookinfo -f https://raw.githubusercontent.com/istio/istio/release-1.24/samples/bookinfo/platform/kube/bookinfo.yaml
-  kubectl --context ${context} apply -n bookinfo -f https://raw.githubusercontent.com/istio/istio/release-1.24/samples/bookinfo/platform/kube/bookinfo-versions.yaml
+  kubectl --context ${context} create ns bookinfo
+  kubectl --context ${context} apply -n bookinfo -f https://raw.githubusercontent.com/LutzLange/bookinfo/main/platform/kube/bookinfo-otel.yaml
 done
 ```
+
+> **Note:** The OTel-instrumented images send traces to `gloo-telemetry-collector.gloo-mesh:4317`. The endpoint is configured via a ConfigMap (`bookinfo-otel-config`) and can be changed without modifying the deployments. The manifest includes both main services and version-specific services (e.g., `reviews-v1`, `reviews-v2`) for canary routing.
 
 ## Install Gloo Gateway v2 on cluster1
 
