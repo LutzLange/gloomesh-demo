@@ -1,46 +1,181 @@
-# Omni
-![alt text](image.png)
-Gloo: An omni-directional solution that covers ingress, service-to-service, and egress traffic with a unified approach.
+# Omni Demo Guide
 
-### Env
+## Architecture Overview
 
-1. Create two clusters
-2. Download the latest solo istioctl nightly build
+```mermaid
+flowchart TB
+    subgraph Internet
+        Client[/"👤 Client"/]
+    end
 
-Set env vars
-```bash
-export CLUSTER1=llange-cluster1
-export CLUSTER2=llange-cluster2
-export ISTIOCTL=/Users/ramvennam/Downloads/istioctl
+    subgraph CLUSTER1["Cluster 1 (Management + Workload)"]
+        subgraph gloo-system1["gloo-system namespace"]
+            GG["Gloo Gateway v2<br/>(Envoy-based)<br/>gatewayClassName: gloo-gateway-v2"]
+        end
+        
+        subgraph gloo-mesh1["gloo-mesh namespace"]
+            MGMT["Gloo Management Plane<br/>• gloo-mesh-mgmt-server<br/>• gloo-mesh-ui<br/>• gloo-jaeger<br/>• prometheus"]
+            AGENT1["Gloo Agent"]
+            TC1["Telemetry Collector"]
+        end
+        
+        subgraph istio-system1["istio-system namespace"]
+            ISTIOD1["istiod<br/>(Control Plane)"]
+            ZTUNNEL1["ztunnel<br/>(L4 + L7 with Solo)"]
+        end
+        
+        subgraph istio-gateways1["istio-gateways namespace"]
+            EW1["East-West Gateway"]
+        end
+        
+        subgraph bookinfo1["bookinfo namespace"]
+            PP1["productpage-v1"]
+            REVIEWS1["reviews-v1/v2/v3"]
+            RATINGS1["ratings-v1"]
+            DETAILS1["details-v1"]
+            WP1["Waypoint Proxy<br/>gatewayClassName: istio-waypoint"]
+        end
+    end
+
+    subgraph CLUSTER2["Cluster 2 (Workload Only)"]
+        subgraph gloo-mesh2["gloo-mesh namespace"]
+            AGENT2["Gloo Agent"]
+            TC2["Telemetry Collector"]
+        end
+        
+        subgraph istio-system2["istio-system namespace"]
+            ISTIOD2["istiod<br/>(Control Plane)"]
+            ZTUNNEL2["ztunnel<br/>(L4 + L7 with Solo)"]
+        end
+        
+        subgraph istio-gateways2["istio-gateways namespace"]
+            EW2["East-West Gateway"]
+        end
+        
+        subgraph bookinfo2["bookinfo namespace"]
+            PP2["productpage-v1"]
+            REVIEWS2["reviews-v1/v2/v3"]
+            RATINGS2["ratings-v1"]
+            DETAILS2["details-v1"]
+            WP2["Waypoint Proxy<br/>gatewayClassName: istio-waypoint"]
+        end
+    end
+
+    %% Traffic Flow
+    Client -->|"HTTP :80"| GG
+    GG -->|"North-South"| ZTUNNEL1
+    ZTUNNEL1 -->|"mTLS (HBONE)"| PP1
+    ZTUNNEL1 -->|"L7 Policy"| WP1
+    WP1 -->|"Canary Routing"| REVIEWS1
+    PP1 --> ZTUNNEL1
+    ZTUNNEL1 --> DETAILS1
+    ZTUNNEL1 --> RATINGS1
+    
+    %% Multi-Cluster
+    EW1 <-->|"mTLS Cross-Cluster"| EW2
+    ZTUNNEL1 -.->|"Global Service"| EW1
+    EW2 -.-> ZTUNNEL2
+    ZTUNNEL2 --> PP2
+    ZTUNNEL2 -->|"L7 Policy"| WP2
+    WP2 --> REVIEWS2
+    
+    %% Control Plane
+    MGMT -->|"Config & Telemetry"| AGENT1
+    MGMT -->|"Config & Telemetry"| AGENT2
+    ISTIOD1 -->|"xDS Config"| ZTUNNEL1
+    ISTIOD1 -->|"xDS Config"| WP1
+    ISTIOD2 -->|"xDS Config"| ZTUNNEL2
+    ISTIOD2 -->|"xDS Config"| WP2
+
+    %% Styling
+    classDef gateway fill:#4A90D9,stroke:#2E6DA4,color:white
+    classDef mesh fill:#6B8E23,stroke:#556B2F,color:white
+    classDef waypoint fill:#9932CC,stroke:#7B1FA2,color:white
+    classDef ztunnel fill:#FF8C00,stroke:#CC7000,color:white
+    classDef mgmt fill:#DC143C,stroke:#B22222,color:white
+    classDef app fill:#708090,stroke:#556B7A,color:white
+    
+    class GG gateway
+    class EW1,EW2 mesh
+    class WP1,WP2 waypoint
+    class ZTUNNEL1,ZTUNNEL2 ztunnel
+    class MGMT,AGENT1,AGENT2 mgmt
+    class PP1,PP2,REVIEWS1,REVIEWS2,RATINGS1,RATINGS2,DETAILS1,DETAILS2 app
 ```
 
-## Deploy Bookinfo sample
+### Component Summary
+
+| Component | Purpose |
+|-----------|---------|
+| **Gloo Gateway v2** | North-South ingress, API Gateway with enterprise auth and rate limiting |
+| **Gloo Management Plane** | Unified UI, Insights, distributed tracing, metrics |
+| **ztunnel** | Zero-trust L4 mTLS + L7 observability (Solo Enterprise) |
+| **East-West Gateway** | Cross-cluster encrypted traffic |
+| **Waypoint Proxy** | L7 policy enforcement: canary, auth, rate limiting |
+
+---
+
+## Prerequisites & Setup
+
+> **This section prepares the environment before the demo. Target: automate via shell script.**
+
+### Environment
+
+| Component | Version |
+|-----------|---------|
+| Gateway API | v1.4.0 |
+| Gloo Gateway | 2.0.1 |
+| Gloo Operator | 0.4.2 |
+| Istio (Solo distribution) | 1.28.1 |
+| Gloo Platform | 2.11.0 |
+
+### Required Environment Variables
+
+Create an `env.sh` file with your cluster contexts and versions:
 
 ```bash
-for context in ${CLUSTER1} ${CLUSTER2}; do
-  kubectl --context ${context} create ns bookinfo 
-  kubectl --context ${context} apply -n bookinfo -f https://raw.githubusercontent.com/istio/istio/release-1.24/samples/bookinfo/platform/kube/bookinfo.yaml
-  kubectl --context ${context} apply -n bookinfo -f https://raw.githubusercontent.com/istio/istio/release-1.24/samples/bookinfo/platform/kube/bookinfo-versions.yaml
-done
+export CLUSTER1=<your-cluster1-context>   # e.g., lutzl-cluster1
+export CLUSTER2=<your-cluster2-context>   # e.g., lutzl-cluster2
+export ISTIO_VERSION=1.28.1
+export GLOO_VERSION=2.11.0
+export GLOO_GATEWAY_LICENSE_KEY=<your-key>
+export GLOO_MESH_LICENSE_KEY=<your-key>
+
+# Solo istioctl (installed by the operator, or download manually)
+export ISTIOCTL=/home/$USER/.istioctl/bin/istioctl
 ```
 
-## Install Gloo Gateway on cluster1
+Source the environment before starting:
+```bash
+source env.sh
+```
+
+### Setup Steps (Script-Ready)
+
+#### 1. Install Gateway API CRDs
 
 ```bash
-helm repo add glooe https://storage.googleapis.com/gloo-ee-helm
-helm repo update
-
-helm upgrade --install -n gloo-system gloo glooe/gloo-ee \
---create-namespace \
---version 1.19.0-beta3 \
---kube-context ${CLUSTER1} \
---set-string license_key=$GLOO_GATEWAY_LICENSE_KEY \
--f ./gg-values.yaml
+kubectl --context ${CLUSTER1} apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.0/standard-install.yaml
 ```
 
-## Gloo Gateway to expose productpage
+#### 2. Install Gloo Gateway v2
 
-```yaml
+```bash
+helm upgrade -i --create-namespace --namespace gloo-system \
+  --kube-context ${CLUSTER1} \
+  --version 2.0.1 \
+  gloo-gateway-crds oci://us-docker.pkg.dev/solo-public/gloo-gateway/charts/gloo-gateway-crds
+
+helm upgrade -i -n gloo-system gloo-gateway \
+  oci://us-docker.pkg.dev/solo-public/gloo-gateway/charts/gloo-gateway \
+  --kube-context ${CLUSTER1} \
+  --version 2.0.1 \
+  --set licensing.glooGatewayLicenseKey=$GLOO_GATEWAY_LICENSE_KEY
+```
+
+#### 3. Create Gateway for Ingress
+
+```bash
 kubectl --context=${CLUSTER1} apply -f - <<EOF
 kind: Gateway
 apiVersion: gateway.networking.k8s.io/v1
@@ -48,7 +183,7 @@ metadata:
   name: http
   namespace: gloo-system
 spec:
-  gatewayClassName: gloo-gateway
+  gatewayClassName: gloo-gateway-v2
   listeners:
   - protocol: HTTP
     port: 80
@@ -56,7 +191,233 @@ spec:
     allowedRoutes:
       namespaces:
         from: All
+EOF
+
+export GLOO_IP=$(kubectl get svc -n gloo-system http --context $CLUSTER1 -o jsonpath="{.status.loadBalancer.ingress[0]['hostname','ip']}") && echo $GLOO_IP
+```
+
+#### 4. Configure Trust (Shared Root CA)
+
+```bash
+for context in ${CLUSTER1} ${CLUSTER2}; do
+  kubectl --context=${context} create ns istio-system || true
+  kubectl --context=${context} create ns istio-gateways || true
+done
+
+kubectl --context=${CLUSTER1} create secret generic cacerts -n istio-system \
+  --from-file=./omni/certs/cluster1/ca-cert.pem \
+  --from-file=./omni/certs/cluster1/ca-key.pem \
+  --from-file=./omni/certs/cluster1/root-cert.pem \
+  --from-file=./omni/certs/cluster1/cert-chain.pem
+
+kubectl --context=${CLUSTER2} create secret generic cacerts -n istio-system \
+  --from-file=./omni/certs/cluster2/ca-cert.pem \
+  --from-file=./omni/certs/cluster2/ca-key.pem \
+  --from-file=./omni/certs/cluster2/root-cert.pem \
+  --from-file=./omni/certs/cluster2/cert-chain.pem
+```
+
+#### 5. Install Gloo Operator + Istio Ambient
+
+```bash
+# Install Gloo Operator on both clusters
+for context in ${CLUSTER1} ${CLUSTER2}; do
+  helm upgrade --install --kube-context=${context} gloo-operator \
+    oci://us-docker.pkg.dev/solo-public/gloo-operator-helm/gloo-operator \
+    --version 0.4.2 \
+    -n gloo-mesh \
+    --create-namespace \
+    --set manager.env.SOLO_ISTIO_LICENSE_KEY=${GLOO_MESH_LICENSE_KEY} &
+done
+wait
+
+# Deploy Istio via ServiceMeshController
+kubectl --context=${CLUSTER1} apply -n gloo-mesh -f - <<EOF
+apiVersion: operator.gloo.solo.io/v1
+kind: ServiceMeshController
+metadata:
+  name: managed-istio
+  labels:
+    app.kubernetes.io/name: managed-istio
+spec:
+  cluster: cluster1
+  network: cluster1
+  dataplaneMode: Ambient
+  installNamespace: istio-system
+  version: ${ISTIO_VERSION}
+EOF
+
+kubectl --context=${CLUSTER2} apply -n gloo-mesh -f - <<EOF
+apiVersion: operator.gloo.solo.io/v1
+kind: ServiceMeshController
+metadata:
+  name: managed-istio
+  labels:
+    app.kubernetes.io/name: managed-istio
+spec:
+  cluster: cluster2
+  network: cluster2
+  dataplaneMode: Ambient
+  installNamespace: istio-system
+  version: ${ISTIO_VERSION}
+EOF
+```
+
+#### 6. Install Gloo Management Plane
+
+```bash
+helm repo add gloo-platform https://storage.googleapis.com/gloo-platform/helm-charts
+helm repo update
+
+# Adopt CRDs if Gloo Gateway already installed
+kubectl --context ${CLUSTER1} annotate crd authconfigs.extauth.solo.io \
+  meta.helm.sh/release-name=gloo-platform-crds \
+  meta.helm.sh/release-namespace=gloo-mesh \
+  --overwrite
+
+helm upgrade -i gloo-platform-crds gloo-platform/gloo-platform-crds \
+  -n gloo-mesh \
+  --kube-context ${CLUSTER1} \
+  --create-namespace \
+  --version ${GLOO_VERSION}
+
+# IMPORTANT: Create KubernetesCluster CR for cluster1 BEFORE installing gloo-platform
+# This allows the agent to connect immediately without CrashLoop
+kubectl --context ${CLUSTER1} apply -f - <<EOF
+apiVersion: admin.gloo.solo.io/v2
+kind: KubernetesCluster
+metadata:
+  name: cluster1
+  namespace: gloo-mesh
+spec:
+  clusterDomain: cluster.local
+EOF
+
+helm upgrade -i gloo-platform gloo-platform/gloo-platform \
+  -n gloo-mesh \
+  --kube-context ${CLUSTER1} \
+  --version ${GLOO_VERSION} \
+  --set common.cluster=cluster1 \
+  --set licensing.glooMeshLicenseKey=$GLOO_MESH_LICENSE_KEY \
+  --set glooMgmtServer.enabled=true \
+  --set glooUi.enabled=true \
+  --set glooInsightsEngine.enabled=true \
+  --set glooAgent.enabled=true \
+  --set prometheus.enabled=true \
+  --set telemetryGateway.enabled=true \
+  --set telemetryCollector.enabled=true \
+  --set jaeger.enabled=true \
+  --set 'telemetryGatewayCustomization.pipelines.traces/jaeger.enabled=true' \
+  --set 'telemetryCollectorCustomization.pipelines.traces/istio.enabled=true'
+```
+
+> **Note:** The `telemetryCollectorCustomization.pipelines.traces/istio.enabled=true` setting automatically:
+> - Creates a `gloo-telemetry-collector-tracing` service
+> - Injects an `otel-tracing` extensionProvider into Istio's mesh config
+> - No manual `meshConfig` configuration is needed in the ServiceMeshController
+
+#### 7. Register Cluster2 as Workload Cluster
+
+Get the telemetry gateway address from cluster1:
+
+```bash
+export TELEMETRY_GATEWAY_ADDRESS=$(kubectl get svc -n gloo-mesh gloo-telemetry-gateway --context $CLUSTER1 -o jsonpath="{.status.loadBalancer.ingress[0]['hostname','ip']}"):4317
+echo "Telemetry Gateway: $TELEMETRY_GATEWAY_ADDRESS"
+```
+
+Use `meshctl cluster register` to register cluster2. This automatically:
+- Creates the KubernetesCluster CR on cluster1
+- Installs gloo-platform-crds and gloo-platform charts on cluster2
+- Configures TLS certificates for secure relay communication
+
+```bash
+# Install meshctl if not already installed
+curl -sL https://run.solo.io/meshctl/install | GLOO_MESH_VERSION=v${GLOO_VERSION} sh -
+export PATH=$HOME/.gloo-mesh/bin:$PATH
+
+# Register cluster2
+meshctl cluster register cluster2 \
+  --kubecontext $CLUSTER1 \
+  --profiles gloo-mesh-agent \
+  --remote-context $CLUSTER2 \
+  --telemetry-server-address $TELEMETRY_GATEWAY_ADDRESS
+```
+
+> **Note:** The Helm-based approach for cluster registration requires manual TLS secret setup and is not recommended. meshctl handles all TLS secrets (`relay-client-tls-secret`, `relay-root-tls-secret`, `relay-identity-token-secret`) automatically.
+
+### Verify Setup
+
+```bash
+# Cluster1 pods running
+kubectl --context ${CLUSTER1} get pods -n gloo-system
+kubectl --context ${CLUSTER1} get pods -n gloo-mesh
+kubectl --context ${CLUSTER1} get pods -n istio-system
+
+# Cluster2 pods running
+kubectl --context ${CLUSTER2} get pods -n gloo-mesh
+kubectl --context ${CLUSTER2} get pods -n istio-system
+
+# Both clusters registered
+kubectl --context ${CLUSTER1} get kubernetesclusters -n gloo-mesh
+# Expected: cluster1 ACCEPTED, cluster2 ACCEPTED
+
+# GatewayClasses available
+kubectl --context ${CLUSTER1} get gatewayclasses
+# Expected: gloo-gateway-v2, istio, istio-waypoint, istio-eastwest
+
+# Management UI accessible
+kubectl --context ${CLUSTER1} port-forward -n gloo-mesh svc/gloo-mesh-ui 8090:8090 &
+open http://localhost:8090
+```
+
 ---
+
+# Demo
+
+> **Before starting:** Ensure environment variables are set:
+> ```bash
+> export GLOO_IP=$(kubectl get svc -n gloo-system http --context $CLUSTER1 -o jsonpath="{.status.loadBalancer.ingress[0]['hostname','ip']}")
+> echo "Gloo Gateway IP: $GLOO_IP"
+> ```
+
+---
+
+## 1. Onboarding an Application
+
+### Why This Matters
+
+**The Problem:** Traditional service mesh adoption requires injecting sidecar proxies into every pod. This means:
+- Restarting all workloads during onboarding
+- 0.5-1 vCPU overhead *per pod* (a "sidecar tax" that can cost $2M+ annually at scale)
+- Complex upgrades requiring coordinated pod restarts
+- Application teams blocked waiting for mesh configuration
+
+**The Solution:** With Ambient Mesh, platform teams enable zero-trust networking for any namespace with a single label — **no sidecars, no restarts, no application changes**. Development teams get security and observability without any friction.
+
+> 💡 **Business Impact:** Organizations report up to **92% infrastructure cost reduction** compared to sidecar-based mesh, plus dramatically faster onboarding — from weeks to minutes.
+
+### Deploy the Application
+
+We'll use Bookinfo as our sample application. These images include OpenTelemetry instrumentation for application-level tracing.
+
+```bash
+for context in ${CLUSTER1} ${CLUSTER2}; do
+  kubectl --context ${context} create ns bookinfo
+  kubectl --context ${context} apply -n bookinfo -f https://raw.githubusercontent.com/LutzLange/bookinfo/main/platform/kube/bookinfo-otel.yaml
+done
+```
+
+Verify pods are running:
+```bash
+kubectl --context ${CLUSTER1} get pods -n bookinfo
+```
+
+### Expose via Ingress
+
+Create an HTTPRoute to expose productpage through Gloo Gateway:
+
+```bash
+kubectl --context=${CLUSTER1} apply -f - <<EOF
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -86,101 +447,167 @@ spec:
 EOF
 ```
 
-Get the IP address of Gloo Gateway and hit productpage. This should route you to productpage on cluster1:
+Test access:
 ```bash
-export GLOO_IP=$(kubectl get svc -n gloo-system gloo-proxy-http --context $CLUSTER1 -o jsonpath="{.status.loadBalancer.ingress[0]['hostname','ip']}") && echo $GLOO_IP
 open http://${GLOO_IP}/productpage
 ```
 
+At this point, the application works but **is not in the mesh** — no mTLS, no observability. This is a security gap that traditional approaches take weeks to close.
 
-# Install Istio
-
-## Configure Trust
-```bash
-for context in ${CLUSTER1} ${CLUSTER2}; do
-  kubectl --context=${context} create ns istio-system || true
-  kubectl --context=${context} create ns istio-gateways || true
-done
-kubectl --context=${CLUSTER1} create secret generic cacerts -n istio-system \
---from-file=./certs/cluster1/ca-cert.pem \
---from-file=./certs/cluster1/ca-key.pem \
---from-file=./certs/cluster1/root-cert.pem \
---from-file=./certs/cluster1/cert-chain.pem
-kubectl --context=${CLUSTER2} create secret generic cacerts -n istio-system \
---from-file=./certs/cluster2/ca-cert.pem \
---from-file=./certs/cluster2/ca-key.pem \
---from-file=./certs/cluster2/root-cert.pem \
---from-file=./certs/cluster2/cert-chain.pem
-```
-
-## Install Istio using the Gloo Operator
-```bash
-for context in ${CLUSTER1} ${CLUSTER2}; do
-  helm upgrade --install --kube-context=${context} gloo-operator oci://us-docker.pkg.dev/solo-public/gloo-operator-helm/gloo-operator --version 0.1.0-beta.3 -n gloo-system --create-namespace &
-done
-```
-
-
-Use the `ServiceMeshController` resource to install Istio on both clusters
+### Add to Mesh — One Label
 
 ```bash
-kubectl --context=${CLUSTER1} apply -f - <<EOF
-apiVersion: operator.gloo.solo.io/v1
-kind: ServiceMeshController
-metadata:
-  name: istio
-spec:
-  version: 1.24.3
-  cluster: cluster1
-  network: cluster1
-EOF
-
-kubectl --context=${CLUSTER2} apply -f - <<EOF
-apiVersion: operator.gloo.solo.io/v1
-kind: ServiceMeshController
-metadata:
-  name: istio
-spec:
-  version: 1.24.3
-  cluster: cluster2
-  network: cluster2
-EOF
-```
-
-## Onboard Gloo Gateway and Bookinfo to the Mesh
-
-```bash
-kubectl --context ${CLUSTER1} label namespace gloo-system istio.io/dataplane-mode=ambient
 kubectl --context ${CLUSTER1} label namespace bookinfo istio.io/dataplane-mode=ambient
 kubectl --context ${CLUSTER2} label namespace bookinfo istio.io/dataplane-mode=ambient
 ```
 
-### Peer the clusters together
+**That's it.** In seconds, the application is now part of the mesh with:
+- ✅ **All traffic encrypted with mTLS** — zero-trust by default
+- ✅ **Cryptographic identities (SPIFFE)** — no more IP-based security
+- ✅ **L7 observability** — HTTP metrics without sidecars (Solo Enterprise exclusive)
+- ✅ **No pod restarts** — zero disruption to running workloads
 
-Deploy an east-west gateway:
+> 🎯 **Demo Talking Point:** "Notice that the pods are still running with the same restart count. We just enabled encryption and observability for the entire namespace without touching the application. Platform teams can roll this out progressively, namespace by namespace, with zero coordination required from dev teams."
+
+Verify ztunnel is handling traffic:
 ```bash
+kubectl --context ${CLUSTER1} logs -n istio-system -l app=ztunnel --tail=5 | grep bookinfo
+```
+
+---
+
+## 2. Zero-Trust Security: mTLS & Cluster Peering
+
+### Why This Matters
+
+**The Problem:** Organizations struggle to implement zero-trust security across Kubernetes:
+- Network policies only work at L3/L4 — they can't verify *who* is making a request
+- Traditional firewalls require ticket-based workflows that slow development velocity
+- Cross-cluster communication is often unencrypted or uses brittle certificate management
+- Security teams lack visibility into east-west traffic
+
+**The Solution:** Ambient Mesh provides **automatic mTLS everywhere** — every service gets a cryptographic identity (SPIFFE), and all traffic is encrypted without any per-service configuration. Cross-cluster communication flows through encrypted east-west gateways with the same strong identity guarantees.
+
+> 💡 **Business Impact:** Meet compliance requirements (PCI-DSS, HIPAA, SOC2) for encryption-in-transit automatically. Security teams get L7 visibility into all service-to-service communication without application changes.
+
+### Verify mTLS is Active
+
+Check that workloads have SPIFFE identities:
+```bash
+kubectl --context ${CLUSTER1} exec -n bookinfo deploy/productpage-v1 -- \
+  cat /var/run/secrets/istio/root-cert.pem | openssl x509 -noout -subject
+```
+
+Verify traffic is encrypted (ztunnel shows HBONE connections):
+```bash
+kubectl --context ${CLUSTER1} logs -n istio-system -l app=ztunnel --tail=20 | grep -E "inbound|outbound"
+```
+
+### Peer the Clusters
+
+Enable cross-cluster communication with encrypted east-west gateways:
+
+```bash
+# Deploy east-west gateways
 $ISTIOCTL --context=${CLUSTER1} multicluster expose -n istio-gateways
 $ISTIOCTL --context=${CLUSTER2} multicluster expose -n istio-gateways
-```
 
-Link clusters together:
-```bash
+# Wait for LoadBalancer IPs
+kubectl --context ${CLUSTER1} get svc -n istio-gateways
+kubectl --context ${CLUSTER2} get svc -n istio-gateways
+
+# Link clusters (after IPs assigned)
 $ISTIOCTL multicluster link --contexts=$CLUSTER1,$CLUSTER2 -n istio-gateways
+
+# Verify linking was successful
+kubectl --context ${CLUSTER1} get gateways -n istio-gateways
+# Expected: istio-eastwest AND istio-remote-peer-cluster2 both with PROGRAMMED=True
 ```
 
-## Multi-Cluster Services
+**Result:** Services can now discover and communicate across clusters — all mTLS-encrypted, no VPNs or complex network setup required.
 
-Enable productpage to be multi-cluster on both clusters
+### Also Add Gloo Gateway to the Mesh
+
 ```bash
-for context in ${CLUSTER1} ${CLUSTER2}; do
-  kubectl --context ${context}  -n bookinfo label service productpage solo.io/service-scope=global
-  kubectl --context ${context}  -n bookinfo annotate service productpage  networking.istio.io/traffic-distribution=Any
+kubectl --context ${CLUSTER1} label namespace gloo-system istio.io/dataplane-mode=ambient
+```
+
+Now ingress traffic is mTLS-encrypted end-to-end from client to service.
+
+---
+
+## 3. Observability in the Management UI
+
+### Why This Matters
+
+Platform teams managing multiple clusters need unified visibility — not fragmented tools per cluster. Gloo Platform provides a **single pane of glass** with distributed tracing, security insights, and real-time metrics across all clusters.
+
+> 💡 **Solo Enterprise Advantage:** Get L7 observability (HTTP methods, paths, status codes) from ztunnel *without* deploying waypoint proxies. Open source Istio only provides L4 metrics at this layer.
+
+### Access the Gloo UI
+
+```bash
+kubectl --context ${CLUSTER1} port-forward -n gloo-mesh svc/gloo-mesh-ui 8090:8090
+open http://localhost:8090
+```
+
+### Dashboard Overview
+
+The UI shows:
+- **Clusters:** Both clusters registered and healthy
+- **Services:** All mesh services with health status
+- **Insights:** Automatic security and configuration recommendations
+
+### Distributed Tracing
+
+Navigate to **Tracing** in the sidebar.
+
+Generate some traffic:
+```bash
+for i in {1..10}; do 
+  curl -s http://${GLOO_IP}/productpage > /dev/null
+  sleep 1
 done
 ```
 
-## Gloo Gateway Multi-Cluster Routing
-Update the previously applied HTTPRoute to route to the global productpage destination:
-```yaml
+In the Tracing UI:
+1. Select service `productpage.bookinfo`
+2. Click **Find Traces**
+3. Click on a trace to see the full request flow
+
+**Solo Enterprise Advantage:** With Solo's ztunnel, you see L7 details (HTTP method, path, status codes) without deploying waypoint proxies. Community Istio ztunnel only provides L4 metrics.
+
+### Insights Engine
+
+Navigate to **Insights** to see automatic recommendations:
+- Security vulnerabilities
+- Configuration issues
+- Best practice violations
+
+---
+
+## 4. Global Service Failover & Distribution
+
+### Why This Matters
+
+Running services across multiple clusters is table stakes for resilience, but traditional approaches require complex DNS configuration, manual failover procedures, or expensive global load balancers. With Gloo Platform, a single label makes any service **globally addressable** with automatic failover — no infrastructure changes required.
+
+> 💡 **Business Impact:** Achieve multi-region high availability without managing separate DNS entries or load balancer configurations per service.
+
+### Enable Global Services
+
+Make productpage available as a global service across both clusters:
+
+```bash
+for context in ${CLUSTER1} ${CLUSTER2}; do
+  kubectl --context ${context} -n bookinfo label service productpage solo.io/service-scope=global
+  kubectl --context ${context} -n bookinfo annotate service productpage networking.istio.io/traffic-distribution=Any
+done
+```
+
+### Update Ingress to Use Global Hostname
+
+```bash
 kubectl --context=${CLUSTER1} apply -f - <<EOF
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -205,9 +632,6 @@ spec:
     - path:
         type: Exact
         value: /logout
-    # backendRefs:
-    # - name: productpage
-    #   port: 9080
     backendRefs:
     - kind: Hostname
       group: networking.istio.io
@@ -216,39 +640,108 @@ spec:
 EOF
 ```
 
-Open productpage again. You should be hitting productpage on both clusters! Check the reviews pod name to verify.
-```
+### Test Multi-Cluster Load Balancing
+
+```bash
 open http://${GLOO_IP}/productpage
 ```
 
+Refresh multiple times — notice the **reviews pod name changes** between clusters.
 
-## Gloo Gateway as Waypoint
+Identify which cluster served each request:
+```bash
+for ctx in ${CLUSTER1} ${CLUSTER2}; do
+  echo "=== $ctx ==="
+  kubectl --context $ctx get pods -n bookinfo -l 'app in (productpage,reviews)' -o wide
+done
+```
 
-```yaml
+### Simulate Failover
+
+Scale down productpage on cluster1:
+```bash
+kubectl --context ${CLUSTER1} scale deploy productpage-v1 -n bookinfo --replicas=0
+```
+
+Traffic automatically routes to cluster2. No configuration changes needed.
+
+Restore:
+```bash
+kubectl --context ${CLUSTER1} scale deploy productpage-v1 -n bookinfo --replicas=1
+```
+
+---
+
+## 5. Canary Deployments & Rate Limiting
+
+### Why This Matters
+
+Traditional API gateways were designed before Kubernetes — they require external databases, proprietary configuration, and don't integrate with service mesh. Gloo Gateway is **cloud-native from the ground up**: built on Envoy, Kubernetes Gateway API-native, and seamlessly integrated with the mesh for unified north-south and east-west traffic management.
+
+> 💡 **One API, Full Stack:** The same HTTPRoute and policy resources work across ingress and mesh. Platform teams define guardrails once; dev teams get self-service canary deployments and traffic control.
+
+### Deploy Waypoint for L7 Policies
+
+Waypoints enable advanced L7 traffic management for specific services:
+
+```bash
+for ctx in ${CLUSTER1} ${CLUSTER2}; do
+kubectl --context ${ctx} apply -f - <<EOF
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
- name: gloo-waypoint
- namespace: bookinfo
+  name: waypoint
+  namespace: bookinfo
 spec:
- gatewayClassName: gloo-waypoint
- listeners:
- - name: proxy
-   port: 15088
-   protocol: istio.io/PROXY
-```
-```bash
-kubectl --context ${CLUSTER1} label ns bookinfo istio.io/use-waypoint=gloo-waypoint  --overwrite
-```
-
-Use standard waypoint in cluster2
-```bash
-$ISTIOCTL --context=${CLUSTER2} waypoint apply -n bookinfo
-kubectl --context ${CLUSTER2} label ns bookinfo istio.io/use-waypoint=waypoint  --overwrite
+  gatewayClassName: istio-waypoint
+  listeners:
+  - name: mesh
+    port: 15008
+    protocol: HBONE
+EOF
+done
 ```
 
-Use waypoints for canary traffic going to reviews
-```yaml
+Attach waypoint to the reviews service:
+```bash
+kubectl --context ${CLUSTER1} label svc reviews -n bookinfo istio.io/use-waypoint=waypoint
+kubectl --context ${CLUSTER2} label svc reviews -n bookinfo istio.io/use-waypoint=waypoint
+```
+
+#### Enable Tracing on Waypoints (Optional)
+
+To see detailed traces through the waypoint proxy in Jaeger:
+
+```bash
+for ctx in ${CLUSTER1} ${CLUSTER2}; do
+kubectl --context ${ctx} apply -f - <<EOF
+apiVersion: telemetry.istio.io/v1
+kind: Telemetry
+metadata:
+  name: tracing-waypoint
+  namespace: bookinfo
+spec:
+  targetRefs:
+  - kind: Gateway
+    name: waypoint
+    group: gateway.networking.k8s.io
+  tracing:
+  - providers:
+    - name: otel-tracing
+    randomSamplingPercentage: 100
+EOF
+done
+```
+
+> **Note:** The `otel-tracing` provider is automatically configured by Gloo Platform when `traces/istio` pipeline is enabled.
+
+### Canary Routing: Route by User
+
+Route user "jason" to reviews-v2 (with stars), everyone else to reviews-v1 (no stars):
+
+```bash
+for ctx in ${CLUSTER1} ${CLUSTER2}; do
+kubectl --context ${ctx} apply -f - <<EOF
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -271,114 +764,93 @@ spec:
   - backendRefs:
     - name: reviews-v1
       port: 9080
+EOF
+done
 ```
-Apply the above yaml to both clusters:
+
+### Test Canary Routing
+
+1. Open `http://${GLOO_IP}/productpage`
+2. **Without login:** No stars (reviews-v1)
+3. **Login as "jason":** Black stars (reviews-v2)
+4. **Login as anyone else:** No stars (reviews-v1)
+
+Or test via CLI:
 ```bash
-kubectl apply -f reviews-L7.yaml --context $CLUSTER1
-kubectl apply -f reviews-L7.yaml --context $CLUSTER2
+# Default - reviews-v1
+kubectl --context ${CLUSTER1} exec -n bookinfo deploy/productpage-v1 -c productpage -- \
+  curl -s reviews:9080/reviews/0 | python3 -c "import sys,json; print(json.load(sys.stdin).get('podname','unknown'))"
+
+# User jason - reviews-v2  
+kubectl --context ${CLUSTER1} exec -n bookinfo deploy/productpage-v1 -c productpage -- \
+  curl -s -H "end-user: jason" reviews:9080/reviews/0 | python3 -c "import sys,json; print(json.load(sys.stdin).get('podname','unknown'))"
 ```
 
-## Gloo Gateway as an AI Gateway
+### Rate Limiting: Protect Your APIs
 
-```yaml
-apiVersion: gateway.gloo.solo.io/v1alpha1
-kind: GatewayParameters
+Apply a rate limit to productpage (5 requests/minute):
+
+```bash
+kubectl --context ${CLUSTER1} apply -f - <<EOF
+apiVersion: gloo.solo.io/v1alpha1
+kind: GlooTrafficPolicy
 metadata:
-  name: gloo-ai-gateway-override
-  namespace: gloo-system
+  name: productpage-ratelimit
+  namespace: bookinfo
 spec:
-  kube:
-    aiExtension:
-      enabled: true
-    service:
-      type: ClusterIP
-    envoyContainer:
-      image:
-        registry: quay.io/solo-io
-        repository: gloo-ee-envoy-wrapper
-        tag: 1.18.2
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: bookinfo-gg
+  rateLimit:
+    local:
+      tokenBucket:
+        maxTokens: 5
+        tokensPerFill: 5
+        fillInterval: 60s
+EOF
+```
+
+### Test Rate Limiting
+
+```bash
+for i in {1..10}; do 
+  echo "Request $i: $(curl -s -o /dev/null -w "%{http_code}" http://${GLOO_IP}/productpage)"
+  sleep 0.5
+done
+```
+
+Expected: First 5 return `200`, remaining return `429 Too Many Requests`.
+
+View rate limit headers:
+```bash
+curl -v http://${GLOO_IP}/productpage 2>&1 | grep -i "x-ratelimit"
+```
+
+> 🎯 **Demo Talking Point:** "We just added API protection with a simple Kubernetes resource — no separate rate limiting service, no external database. This same policy model works for OAuth, JWT validation, WAF, and more. Platform teams define the guardrails; dev teams get self-service within those boundaries."
+
+### Clean Up Rate Limit
+
+```bash
+kubectl --context ${CLUSTER1} delete glootrafficpolicy productpage-ratelimit -n bookinfo
+```
+
 ---
-kind: Gateway
-apiVersion: gateway.networking.k8s.io/v1
-metadata:
-  name: ai-gateway
-  namespace: gloo-system
-  annotations:
-    gateway.gloo.solo.io/gateway-parameters-name: gloo-ai-gateway-override
-spec:
-  gatewayClassName: gloo-gateway
-  listeners:
-  - protocol: HTTP
-    port: 8080
-    name: http
-    allowedRoutes:
-      namespaces:
-        from: All
-```
 
-```bash
-kubectl --context ${CLUSTER1} create secret generic openai-secret -n gloo-system \
---from-literal="Authorization=Bearer $OPENAI_API_KEY" \
---dry-run=client -oyaml | kubectl apply -f -
-```
+## Summary
 
-```yaml
-apiVersion: gloo.solo.io/v1
-kind: Upstream
-metadata:
-  labels:
-    app: gloo
-  name: openai
-  namespace: gloo-system
-spec:
-  ai:
-    openai:
-      authToken:
-        secretRef:
-          name: openai-secret
-          namespace: gloo-system
----
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: openai
-  namespace: gloo-system
-spec:
-  parentRefs:
-    - name: ai-gateway
-      namespace: gloo-system
-  rules:
-  - matches:
-    - path:
-        type: PathPrefix
-        value: /openai
-    backendRefs:
-    - name: openai
-      namespace: gloo-system
-      group: gloo.solo.io
-      kind: Upstream
-```
+| Capability | How | Business Value |
+|------------|-----|----------------|
+| **Onboard to Mesh** | One namespace label | **92% cost reduction** vs sidecars, zero dev team friction |
+| **mTLS Everywhere** | Automatic with ambient | Compliance (PCI-DSS, HIPAA, SOC2) out of the box |
+| **Multi-Cluster** | Global service labels | HA/DR without complex DNS or load balancer config |
+| **Observability** | Gloo UI + Jaeger | **10x faster MTTR** with unified visibility |
+| **Canary Routing** | HTTPRoute + Waypoint | Safe deployments, self-service for dev teams |
+| **Rate Limiting** | GlooTrafficPolicy | API protection without separate gateway infrastructure |
 
-Call OpenAI from ratings:
-```bash
-kubectl --context ${CLUSTER1} exec -n bookinfo deploy/ratings-v1 -c ratings -- curl -v "gloo-proxy-ai-gateway.gloo-system:8080/openai" -H content-type:application/json -d '{"model": "gpt-4o-mini","max_tokens": 128,"messages": [{"role": "system","content": "What is an Omni Gateway?"}]}' | jq
-```
+### Key Takeaways for Platform Teams
 
-## Gloo Management Plane
-
-### cluster1 will be both workload and managment:
-```bash
-
-helm upgrade -i gloo-platform-crds gloo-platform/gloo-platform-crds -n gloo-mesh --create-namespace --version=2.7.0
-helm upgrade -i gloo-platform gloo-platform/gloo-platform -n gloo-mesh --version 2.7.0 --values mgmt-values.yaml \
-  --set licensing.glooMeshLicenseKey=$GLOO_MESH_LICENSE_KEY
-```
-
-### Register cluster2 as a workload cluster to cluster1:
-```bash
-export TELEMETRY_GATEWAY_ADDRESS=$(kubectl get svc -n gloo-mesh gloo-telemetry-gateway --context $CLUSTER1 -o jsonpath="{.status.loadBalancer.ingress[0]['hostname','ip']}"):4317 && echo $TELEMETRY_GATEWAY_ADDRESS
-
-meshctl cluster register cluster2  --kubecontext $CLUSTER1 --profiles gloo-core-agent --remote-context $CLUSTER2 --telemetry-server-address $TELEMETRY_GATEWAY_ADDRESS
-```
-
-![alt text](ui-screenshot.png)
+1. **Unified Platform:** API Gateway + Service Mesh + Multi-Cluster — one control plane, one configuration model
+2. **Kubernetes-Native:** Gateway API is the standard; no proprietary lock-in, portable across clouds
+3. **Progressive Adoption:** Start with ingress, add mesh per-namespace, scale to multi-cluster — at your own pace
+4. **Enterprise Support:** Solo.io is the #1 corporate contributor to Istio, with 24/7 support and FIPS-validated images
