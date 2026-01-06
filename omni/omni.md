@@ -117,7 +117,9 @@ flowchart TB
 
 ## Prerequisites & Setup
 
-> **This section prepares the environment before the demo. Target: automate via shell script.**
+> **Automated Setup Available:** Run `./omni/setup.sh` to execute all setup steps automatically.
+>
+> The script will install all components and verify the environment is ready for the demo.
 
 ### Environment
 
@@ -414,7 +416,25 @@ kubectl --context ${CLUSTER1} get pods -n bookinfo
 
 ### Expose via Ingress
 
-Create an HTTPRoute to expose productpage through Gloo Gateway:
+First, create a Static Backend to route through the Service VIP. This is critical because Gloo Gateway uses EDS (Endpoint Discovery Service) which would otherwise target pod IPs directly, bypassing the waypoint proxy:
+
+```bash
+kubectl --context=${CLUSTER1} apply -f - <<EOF
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: Backend
+metadata:
+  name: productpage-vip
+  namespace: bookinfo
+spec:
+  type: Static
+  static:
+    hosts:
+    - host: productpage.bookinfo.svc.cluster.local
+      port: 9080
+EOF
+```
+
+Now create the HTTPRoute referencing the Backend:
 
 ```bash
 kubectl --context=${CLUSTER1} apply -f - <<EOF
@@ -442,10 +462,13 @@ spec:
         type: Exact
         value: /logout
     backendRefs:
-    - name: productpage
-      port: 9080
+    - name: productpage-vip
+      kind: Backend
+      group: gateway.kgateway.dev
 EOF
 ```
+
+> **Why Static Backend?** Gloo Gateway normally uses EDS to discover pod IPs directly. Using a Static Backend forces traffic through the Service VIP, which then routes through ztunnel and waypoint proxies for proper L7 policy enforcement and tracing.
 
 Test access:
 ```bash
@@ -457,8 +480,13 @@ At this point, the application works but **is not in the mesh** — no mTLS, no 
 ### Add to Mesh — One Label
 
 ```bash
+# Add namespace to ambient mesh
 kubectl --context ${CLUSTER1} label namespace bookinfo istio.io/dataplane-mode=ambient
 kubectl --context ${CLUSTER2} label namespace bookinfo istio.io/dataplane-mode=ambient
+
+# Configure namespace to use waypoint for L7 policies (needed for ingress traffic)
+kubectl --context ${CLUSTER1} label namespace bookinfo istio.io/use-waypoint=waypoint
+kubectl --context ${CLUSTER2} label namespace bookinfo istio.io/use-waypoint=waypoint
 ```
 
 **That's it.** In seconds, the application is now part of the mesh with:
@@ -492,16 +520,17 @@ kubectl --context ${CLUSTER1} logs -n istio-system -l app=ztunnel --tail=5 | gre
 
 ### Verify mTLS is Active
 
-Check that workloads have SPIFFE identities:
+In ambient mode, ztunnel handles all mTLS — workload pods don't have certificate files mounted. Verify traffic is encrypted by checking ztunnel logs for HBONE connections:
+
 ```bash
-kubectl --context ${CLUSTER1} exec -n bookinfo deploy/productpage-v1 -- \
-  cat /var/run/secrets/istio/root-cert.pem | openssl x509 -noout -subject
+# Generate some traffic first
+curl -s http://${GLOO_IP}/productpage > /dev/null
+
+# Check ztunnel logs for encrypted traffic (HBONE protocol)
+kubectl --context ${CLUSTER1} logs -n istio-system -l app=ztunnel --tail=50 | grep -E "inbound|outbound|HBONE"
 ```
 
-Verify traffic is encrypted (ztunnel shows HBONE connections):
-```bash
-kubectl --context ${CLUSTER1} logs -n istio-system -l app=ztunnel --tail=20 | grep -E "inbound|outbound"
-```
+You should see log entries showing traffic being handled by ztunnel with source and destination identities.
 
 ### Peer the Clusters
 
@@ -540,7 +569,7 @@ Now ingress traffic is mTLS-encrypted end-to-end from client to service.
 
 ### Why This Matters
 
-Platform teams managing multiple clusters need unified visibility — not fragmented tools per cluster. Gloo Platform provides a **single pane of glass** with distributed tracing, security insights, and real-time metrics across all clusters.
+Platform teams managing multiple clusters need unified visibility — not fragmented tools per cluster. Gloo Platform provides a **single pane of glass** with security insights, real-time metrics across all clusters, and optional distributed tracing.
 
 > 💡 **Solo Enterprise Advantage:** Get L7 observability (HTTP methods, paths, status codes) from ztunnel *without* deploying waypoint proxies. Open source Istio only provides L4 metrics at this layer.
 
@@ -558,22 +587,11 @@ The UI shows:
 - **Services:** All mesh services with health status
 - **Insights:** Automatic security and configuration recommendations
 
-### Distributed Tracing
+### Distributed Tracing (Optional)
 
-Navigate to **Tracing** in the sidebar.
+> **Note:** Full distributed tracing requires additional configuration. See [Optional: Full Distributed Tracing](#optional-full-distributed-tracing) at the end of this guide.
 
-Generate some traffic:
-```bash
-for i in {1..10}; do 
-  curl -s http://${GLOO_IP}/productpage > /dev/null
-  sleep 1
-done
-```
-
-In the Tracing UI:
-1. Select service `productpage.bookinfo`
-2. Click **Find Traces**
-3. Click on a trace to see the full request flow
+Once tracing is configured, navigate to **Tracing** in the sidebar to view request flows across services.
 
 **Solo Enterprise Advantage:** With Solo's ztunnel, you see L7 details (HTTP method, path, status codes) without deploying waypoint proxies. Community Istio ztunnel only provides L4 metrics.
 
@@ -605,40 +623,27 @@ for context in ${CLUSTER1} ${CLUSTER2}; do
 done
 ```
 
-### Update Ingress to Use Global Hostname
+### Update Backend for Global Hostname
+
+Update the Static Backend to use the global mesh hostname:
 
 ```bash
 kubectl --context=${CLUSTER1} apply -f - <<EOF
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: Backend
 metadata:
-  name: bookinfo-gg
+  name: productpage-vip
   namespace: bookinfo
 spec:
-  parentRefs:
-  - name: http
-    namespace: gloo-system
-  rules:
-  - matches:
-    - path:
-        type: Exact
-        value: /productpage
-    - path:
-        type: PathPrefix
-        value: /static
-    - path:
-        type: Exact
-        value: /login
-    - path:
-        type: Exact
-        value: /logout
-    backendRefs:
-    - kind: Hostname
-      group: networking.istio.io
-      name: productpage.bookinfo.mesh.internal
+  type: Static
+  static:
+    hosts:
+    - host: productpage.bookinfo.mesh.internal
       port: 9080
 EOF
 ```
+
+The HTTPRoute continues to use the same Backend reference — no changes needed there.
 
 ### Test Multi-Cluster Load Balancing
 
@@ -710,30 +715,7 @@ kubectl --context ${CLUSTER2} label svc reviews -n bookinfo istio.io/use-waypoin
 
 #### Enable Tracing on Waypoints (Optional)
 
-To see detailed traces through the waypoint proxy in Jaeger:
-
-```bash
-for ctx in ${CLUSTER1} ${CLUSTER2}; do
-kubectl --context ${ctx} apply -f - <<EOF
-apiVersion: telemetry.istio.io/v1
-kind: Telemetry
-metadata:
-  name: tracing-waypoint
-  namespace: bookinfo
-spec:
-  targetRefs:
-  - kind: Gateway
-    name: waypoint
-    group: gateway.networking.k8s.io
-  tracing:
-  - providers:
-    - name: otel-tracing
-    randomSamplingPercentage: 100
-EOF
-done
-```
-
-> **Note:** The `otel-tracing` provider is automatically configured by Gloo Platform when `traces/istio` pipeline is enabled.
+To see detailed traces through the waypoint proxy in Jaeger, see [Optional: Full Distributed Tracing](#optional-full-distributed-tracing) at the end of this guide.
 
 ### Canary Routing: Route by User
 
@@ -775,16 +757,20 @@ done
 3. **Login as "jason":** Black stars (reviews-v2)
 4. **Login as anyone else:** No stars (reviews-v1)
 
-Or test via CLI:
+Or test via CLI (using ratings pod which has curl installed):
 ```bash
-# Default - reviews-v1
-kubectl --context ${CLUSTER1} exec -n bookinfo deploy/productpage-v1 -c productpage -- \
-  curl -s reviews:9080/reviews/0 | python3 -c "import sys,json; print(json.load(sys.stdin).get('podname','unknown'))"
+# Default - reviews-v1 (no ratings/stars in response)
+kubectl --context ${CLUSTER1} exec -n bookinfo deploy/ratings-v1 -- \
+  curl -s reviews:9080/reviews/0
 
-# User jason - reviews-v2  
-kubectl --context ${CLUSTER1} exec -n bookinfo deploy/productpage-v1 -c productpage -- \
-  curl -s -H "end-user: jason" reviews:9080/reviews/0 | python3 -c "import sys,json; print(json.load(sys.stdin).get('podname','unknown'))"
+# User jason - reviews-v2 (black stars, "color": "black" in response)
+kubectl --context ${CLUSTER1} exec -n bookinfo deploy/ratings-v1 -- \
+  curl -s -H "end-user: jason" reviews:9080/reviews/0
 ```
+
+Expected responses:
+- **reviews-v1**: No `"color"` field in the ratings section (no stars displayed)
+- **reviews-v2**: Contains `"color": "black"` (black stars displayed)
 
 ### Rate Limiting: Protect Your APIs
 
@@ -822,10 +808,7 @@ done
 
 Expected: First 5 return `200`, remaining return `429 Too Many Requests`.
 
-View rate limit headers:
-```bash
-curl -v http://${GLOO_IP}/productpage 2>&1 | grep -i "x-ratelimit"
-```
+> **Note:** Gloo Gateway's local tokenBucket rate limiting returns `429 Too Many Requests` status when the limit is exceeded. This is the primary indicator of rate limiting being enforced.
 
 > 🎯 **Demo Talking Point:** "We just added API protection with a simple Kubernetes resource — no separate rate limiting service, no external database. This same policy model works for OAuth, JWT validation, WAF, and more. Platform teams define the guardrails; dev teams get self-service within those boundaries."
 
@@ -834,6 +817,288 @@ curl -v http://${GLOO_IP}/productpage 2>&1 | grep -i "x-ratelimit"
 ```bash
 kubectl --context ${CLUSTER1} delete glootrafficpolicy productpage-ratelimit -n bookinfo
 ```
+
+---
+
+## Optional: Full Distributed Tracing
+
+This section configures end-to-end distributed tracing across all components:
+- **ztunnel** (L4/L7 proxy - Solo Enterprise feature)
+- **Gloo Gateway** (ingress)
+- **Waypoint proxies** (L7 policy enforcement)
+- **Application services** (via OpenTelemetry instrumentation)
+
+> **Prerequisites:** Complete the main workshop steps first. Tracing requires the telemetry collector and Jaeger to be running (installed during setup).
+
+### Step 0: Configure ztunnel Distributed Tracing
+
+Solo's Enterprise ztunnel includes L7 tracing capabilities. The default configuration points to the wrong collector endpoint. Update it to point to the Gloo telemetry collector:
+
+```bash
+# Check current ztunnel tracing config
+kubectl --context ${CLUSTER1} get configmap istio-ztunnel -n istio-system -o jsonpath='{.data.l7_config\.yaml}'
+
+# Update to point to correct collector
+for ctx in ${CLUSTER1} ${CLUSTER2}; do
+kubectl --context ${ctx} patch configmap istio-ztunnel -n istio-system --type merge -p '{
+  "data": {
+    "l7_config.yaml": "accessLog:\n  enabled: true\n  skipConnectionLog: false\ndistributedTracing:\n  enabled: true\n  otlpEndpoint: http://gloo-telemetry-collector.gloo-mesh:4317\nenabled: true\nmetrics:\n  enabled: true\n"
+  }
+}'
+done
+
+# Restart ztunnel to apply changes
+for ctx in ${CLUSTER1} ${CLUSTER2}; do
+  kubectl --context ${ctx} rollout restart daemonset/ztunnel -n istio-system
+  kubectl --context ${ctx} rollout status daemonset/ztunnel -n istio-system --timeout=120s
+done
+```
+
+> **Note:** ztunnel cannot initiate traces - it reports traces when requests already have trace context from ingress gateways or waypoint proxies.
+
+### Step 1: Create ClusterIP Service for Telemetry Collector
+
+> **Important**: The default `gloo-telemetry-collector` service is a headless service (`ClusterIP: None`). In ambient mode, waypoints use ORIGINAL_DST cluster types which cannot export traces to headless services. Creating a ClusterIP service resolves this.
+
+```bash
+# Create ClusterIP service for telemetry collector
+for ctx in ${CLUSTER1} ${CLUSTER2}; do
+kubectl --context ${ctx} apply -f - <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: gloo-telemetry-collector-clusterip
+  namespace: gloo-mesh
+  labels:
+    app: gloo-telemetry-collector-agent
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/instance: gloo-platform
+    app.kubernetes.io/name: telemetryCollector
+    component: agent-collector
+  ports:
+  - name: grpc-otlp
+    port: 4317
+    targetPort: 4317
+    protocol: TCP
+    appProtocol: grpc
+  - name: otlp-http
+    port: 4318
+    targetPort: 4318
+    protocol: TCP
+  - name: zipkin
+    port: 9411
+    targetPort: 9411
+    protocol: TCP
+  - name: grpc-jaeger
+    port: 14250
+    targetPort: 14250
+    protocol: TCP
+    appProtocol: grpc
+EOF
+done
+```
+
+> **Note**: The `appProtocol: grpc` annotation is critical - it tells Istio to use HTTP/2 for these ports, which is required for gRPC trace export.
+
+### Step 2: Add Extension Provider to Mesh Config
+
+The Istio mesh config needs an `extensionProvider` to define how to reach the OpenTelemetry collector. We point to the **ClusterIP** service (not the headless service). **Both clusters** need this configuration for waypoint tracing to work:
+
+```bash
+# Check if extensionProvider already exists on both clusters
+for ctx in ${CLUSTER1} ${CLUSTER2}; do
+  echo "=== $ctx ==="
+  kubectl --context ${ctx} get configmap istio -n istio-system -o jsonpath='{.data.mesh}' | grep -A5 extensionProviders
+done
+```
+
+If the output is empty, add the extension provider by patching the configmap on **both clusters**:
+
+```bash
+for ctx in ${CLUSTER1} ${CLUSTER2}; do
+  echo "Configuring extensionProvider on $ctx..."
+
+  # Get current mesh config
+  CURRENT_MESH=$(kubectl --context ${ctx} get configmap istio -n istio-system -o jsonpath='{.data.mesh}')
+
+  # Skip if already configured with ClusterIP service
+  if echo "$CURRENT_MESH" | grep -q "gloo-telemetry-collector-clusterip"; then
+    echo "  $ctx: Already configured"
+    continue
+  fi
+
+  # Add extensionProviders - using ClusterIP service for waypoint compatibility
+  NEW_MESH="${CURRENT_MESH}
+extensionProviders:
+- name: otel-tracing
+  opentelemetry:
+    service: gloo-telemetry-collector-clusterip.gloo-mesh.svc.cluster.local
+    port: 4317"
+
+  # Apply the patch
+  kubectl --context ${ctx} patch configmap istio -n istio-system \
+    --type merge -p "{\"data\":{\"mesh\":$(echo "$NEW_MESH" | jq -Rs .)}}"
+done
+
+# Restart istiod on both clusters to pick up the change
+for ctx in ${CLUSTER1} ${CLUSTER2}; do
+  kubectl --context ${ctx} rollout restart deployment/istiod -n istio-system
+done
+for ctx in ${CLUSTER1} ${CLUSTER2}; do
+  kubectl --context ${ctx} rollout status deployment/istiod -n istio-system --timeout=120s
+done
+```
+
+### Step 3: Configure Gloo Gateway Tracing
+
+Gloo Gateway v2 is a standalone Envoy proxy (not Istio-managed), so it requires its own tracing configuration via `HTTPListenerPolicy`:
+
+```bash
+# ReferenceGrant to allow cross-namespace access to telemetry collector
+kubectl --context ${CLUSTER1} apply -f - <<EOF
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: allow-otel-collector-traces-access
+  namespace: gloo-mesh
+spec:
+  from:
+  - group: gateway.kgateway.dev
+    kind: HTTPListenerPolicy
+    namespace: gloo-system
+  to:
+  - group: ""
+    kind: Service
+    name: gloo-telemetry-collector
+EOF
+
+# HTTPListenerPolicy to configure tracing on Gloo Gateway
+kubectl --context ${CLUSTER1} apply -f - <<EOF
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: HTTPListenerPolicy
+metadata:
+  name: tracing-policy
+  namespace: gloo-system
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: http
+  tracing:
+    provider:
+      openTelemetry:
+        serviceName: gloo-gateway
+        grpcService:
+          backendRef:
+            name: gloo-telemetry-collector
+            namespace: gloo-mesh
+            port: 4317
+    spawnUpstreamSpan: true
+EOF
+```
+
+Verify the policy is attached:
+```bash
+kubectl --context ${CLUSTER1} get httplistenerpolicy -n gloo-system
+# Should show ACCEPTED: True
+```
+
+### Step 4: Configure Mesh and Waypoint Tracing
+
+Enable tracing for both the mesh (ztunnel) and waypoint proxies:
+
+**4a. Mesh-wide Telemetry** (enables ztunnel tracing):
+```bash
+for ctx in ${CLUSTER1} ${CLUSTER2}; do
+kubectl --context ${ctx} apply -f - <<EOF
+apiVersion: telemetry.istio.io/v1
+kind: Telemetry
+metadata:
+  name: mesh-tracing
+  namespace: istio-system
+spec:
+  tracing:
+  - providers:
+    - name: otel-tracing
+    randomSamplingPercentage: 100
+EOF
+done
+```
+
+**4b. Waypoint Telemetry** (enables L7 traces through waypoint proxies):
+```bash
+for ctx in ${CLUSTER1} ${CLUSTER2}; do
+kubectl --context ${ctx} apply -f - <<EOF
+apiVersion: telemetry.istio.io/v1
+kind: Telemetry
+metadata:
+  name: tracing-waypoint
+  namespace: bookinfo
+spec:
+  targetRefs:
+  - kind: Gateway
+    name: waypoint
+    group: gateway.networking.k8s.io
+  tracing:
+  - providers:
+    - name: otel-tracing
+    randomSamplingPercentage: 100
+EOF
+done
+```
+
+If you modified the mesh config in Step 2, restart the waypoints on **both clusters** to pick up the new extension provider:
+```bash
+for ctx in ${CLUSTER1} ${CLUSTER2}; do
+  kubectl --context ${ctx} rollout restart deployment/waypoint -n bookinfo
+done
+for ctx in ${CLUSTER1} ${CLUSTER2}; do
+  kubectl --context ${ctx} rollout status deployment/waypoint -n bookinfo --timeout=120s
+done
+```
+
+### Step 5: Generate Traffic and View Traces
+
+Generate some traffic:
+```bash
+for i in {1..10}; do
+  curl -s http://${GLOO_IP}/productpage > /dev/null
+  sleep 1
+done
+```
+
+Access Jaeger in the Gloo UI:
+```bash
+kubectl --context ${CLUSTER1} port-forward -n gloo-mesh svc/gloo-mesh-ui 8090:8090
+open http://localhost:8090
+```
+
+Navigate to **Tracing** in the sidebar:
+1. Select service `gloo-gateway` to see ingress traces
+2. Select service `productpage.bookinfo` for application traces
+3. Select service `waypoint.bookinfo` for L7 policy traces
+4. Click **Find Traces**
+5. Click on a trace to see the full request flow
+
+### Trace Flow Diagram
+
+```
+Client → Gloo Gateway → ztunnel → waypoint → productpage → reviews/details/ratings
+         (trace start)             (L7 trace)  (app traces via OTel instrumentation)
+```
+
+Expected services in traces:
+- `gloo-gateway` - Ingress entry point (HTTPListenerPolicy)
+- `ztunnel` - L4/L7 mesh proxy (Solo Enterprise feature)
+- `waypoint.bookinfo` or destination FQDNs (e.g., `details.bookinfo.svc.cluster.local`) - L7 waypoint traces
+- `productpage`, `details`, `ratings` - OTel-instrumented Bookinfo services
+
+Services that may not appear:
+- `reviews` - Not OTel-instrumented in current Bookinfo images
+
+> **Note:** The Bookinfo images for productpage, details, and ratings include OpenTelemetry instrumentation. The reviews service (Java-based) requires manual instrumentation.
 
 ---
 
