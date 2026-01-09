@@ -48,7 +48,7 @@ step_completed() {
 # Mark a step as completed (appends to progress file)
 mark_step_complete() {
     local step="$1"
-    local progress_file="${PROGRESS_FILE:-/tmp/omni-test-progress}"
+    local progress_file="${PROGRESS_FILE:-.workshop-progress}"
 
     if step_completed "$step"; then
         return 0  # Already marked
@@ -66,7 +66,7 @@ mark_step_complete() {
 
 # Load progress from file
 load_progress() {
-    local progress_file="${PROGRESS_FILE:-/tmp/omni-test-progress}"
+    local progress_file="${PROGRESS_FILE:-.workshop-progress}"
     if [ -f "$progress_file" ]; then
         source "$progress_file"
         log_info "Loaded progress: $COMPLETED_STEPS"
@@ -75,7 +75,7 @@ load_progress() {
 
 # Clear all progress
 clear_progress() {
-    local progress_file="${PROGRESS_FILE:-/tmp/omni-test-progress}"
+    local progress_file="${PROGRESS_FILE:-.workshop-progress}"
     COMPLETED_STEPS=""
     rm -f "$progress_file"
     log_info "Progress cleared"

@@ -98,6 +98,15 @@ cleanup_local() {
     kubectl config delete-context "$CLUSTER1" 2>/dev/null || true
     kubectl config delete-context "$CLUSTER2" 2>/dev/null || true
 
+    # Clean up workshop progress file
+    local SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+    local REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+    local PROGRESS_FILE="$REPO_ROOT/.workshop-progress"
+    if [[ -f "$PROGRESS_FILE" ]]; then
+        log_info "Removing workshop progress file..."
+        rm -f "$PROGRESS_FILE"
+    fi
+
     log_success "Local state cleaned up"
 }
 

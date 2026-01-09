@@ -178,9 +178,9 @@ parse_arguments() {
         exit 1
     fi
 
-    # Set progress file based on config file (each environment gets its own progress)
-    local config_basename=$(basename "$CONFIG_FILE" .sh)
-    export PROGRESS_FILE="/tmp/omni-test-progress-${config_basename}"
+    # Set progress file in the repo directory (not /tmp so it persists and can be cleaned up)
+    local REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+    export PROGRESS_FILE="$REPO_ROOT/.workshop-progress"
 }
 
 load_config() {
@@ -632,10 +632,14 @@ do_test_failover() {
     # Wait for pod to terminate and service mesh to update
     log_info "Waiting for pod termination and mesh update..."
     kubectl --context ${CLUSTER1} wait --for=delete pod -l app=productpage -n bookinfo --timeout=60s 2>/dev/null || true
-    sleep 15  # Additional time for mesh routing to update
 
-    # Should still work (failover to cluster2) - use more retries
-    test_http_endpoint "http://${GLOO_IP}/productpage" "200" "Failover to cluster2" 5
+    # Wait for mesh routing to update - istiod needs time to propagate endpoint changes
+    # across clusters via the east-west gateway
+    log_info "Waiting for mesh routing to propagate (30s)..."
+    sleep 30
+
+    # Should still work (failover to cluster2) - use more retries with longer wait
+    test_http_endpoint "http://${GLOO_IP}/productpage" "200" "Failover to cluster2" 10
 
     # Restore
     log_info "Restoring productpage on cluster1..."

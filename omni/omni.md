@@ -489,7 +489,7 @@ kubectl --context ${CLUSTER1} label namespace bookinfo istio.io/use-waypoint=way
 kubectl --context ${CLUSTER2} label namespace bookinfo istio.io/use-waypoint=waypoint
 ```
 
-**That's it.** In seconds, the application is now part of the mesh with:
+**That's it.** Wait a few seconds for ztunnel to pick up the workloads, then the application is part of the mesh with:
 - ✅ **All traffic encrypted with mTLS** — zero-trust by default
 - ✅ **Cryptographic identities (SPIFFE)** — no more IP-based security
 - ✅ **L7 observability** — HTTP metrics without sidecars (Solo Enterprise exclusive)
@@ -541,11 +541,11 @@ Enable cross-cluster communication with encrypted east-west gateways:
 $ISTIOCTL --context=${CLUSTER1} multicluster expose -n istio-gateways
 $ISTIOCTL --context=${CLUSTER2} multicluster expose -n istio-gateways
 
-# Wait for LoadBalancer IPs
-kubectl --context ${CLUSTER1} get svc -n istio-gateways
-kubectl --context ${CLUSTER2} get svc -n istio-gateways
+# Wait for LoadBalancer IPs (may take 1-2 minutes on cloud providers)
+kubectl --context ${CLUSTER1} get svc -n istio-gateways istio-eastwest
+kubectl --context ${CLUSTER2} get svc -n istio-gateways istio-eastwest
 
-# Link clusters (after IPs assigned)
+# Link clusters (only after both IPs are assigned - check EXTERNAL-IP is not <pending>)
 $ISTIOCTL multicluster link --contexts=$CLUSTER1,$CLUSTER2 -n istio-gateways
 
 # Verify linking was successful
@@ -668,7 +668,9 @@ Scale down productpage on cluster1:
 kubectl --context ${CLUSTER1} scale deploy productpage-v1 -n bookinfo --replicas=0
 ```
 
-Traffic automatically routes to cluster2. No configuration changes needed.
+Wait ~30 seconds for the mesh to propagate the endpoint changes across clusters via the east-west gateway. Then traffic automatically routes to cluster2 — no configuration changes needed.
+
+> **Note:** The mesh needs time to detect the pod termination and update routing across clusters. If you test immediately after scale-down, you may see transient 503 errors.
 
 Restore:
 ```bash
@@ -713,6 +715,8 @@ kubectl --context ${CLUSTER1} label svc reviews -n bookinfo istio.io/use-waypoin
 kubectl --context ${CLUSTER2} label svc reviews -n bookinfo istio.io/use-waypoint=waypoint
 ```
 
+Wait ~10 seconds for the routing rules to propagate before testing.
+
 #### Enable Tracing on Waypoints (Optional)
 
 To see detailed traces through the waypoint proxy in Jaeger, see [Optional: Full Distributed Tracing](#optional-full-distributed-tracing) at the end of this guide.
@@ -749,6 +753,8 @@ spec:
 EOF
 done
 ```
+
+Wait ~10 seconds for the routing rules to propagate.
 
 ### Test Canary Routing
 
