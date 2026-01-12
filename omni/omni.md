@@ -190,15 +190,16 @@ Run the setup:
 After the script completes, verify all components are running:
 
 ```bash
-# Both clusters registered
-kubectl --context ${CLUSTER1} get kubernetesclusters -n gloo-mesh
+./scripts/setup.sh -c env.sh --verify-only
 ```
+
+This checks cluster registration, GatewayClasses, and pod status across both clusters (`gloo-system`, `gloo-mesh`, `istio-system`).
 
 Expected output:
 ```
-NAME       AGE
-cluster1   10m
-cluster2   5m
+NAME       STATUS
+cluster1   ACCEPTED
+cluster2   ACCEPTED
 ```
 
 ```bash

@@ -42,11 +42,12 @@ log_step()    { echo -e "\n${GREEN}==>${NC} ${YELLOW}$1${NC}"; }
 #######################################
 
 usage() {
-    echo "Usage: $0 [-c config_file] [--create-clusters] [-h]"
+    echo "Usage: $0 [-c config_file] [--create-clusters] [--verify-only] [-h]"
     echo ""
     echo "Options:"
     echo "  -c, --config FILE     Load configuration from FILE"
     echo "  --create-clusters     Create GKE clusters if they don't exist (requires GKE_ZONE1/GKE_ZONE2)"
+    echo "  --verify-only         Only run verification checks (skip setup)"
     echo "  -h, --help            Show this help message"
     echo ""
     echo "Required variables (from config file or environment):"
@@ -722,6 +723,7 @@ print_summary() {
 main() {
     local config_file=""
     local create_clusters=false
+    local verify_only=false
 
     # Parse arguments
     while [[ $# -gt 0 ]]; do
@@ -732,6 +734,10 @@ main() {
                 ;;
             --create-clusters)
                 create_clusters=true
+                shift
+                ;;
+            --verify-only)
+                verify_only=true
                 shift
                 ;;
             -h|--help)
@@ -750,6 +756,18 @@ main() {
     fi
 
     set_defaults
+
+    # For verify-only, only check CLUSTER1 and CLUSTER2 (no license keys needed)
+    if [[ "$verify_only" == "true" ]]; then
+        if [[ -z "${CLUSTER1:-}" || -z "${CLUSTER2:-}" ]]; then
+            log_error "Missing required variables: CLUSTER1 and CLUSTER2"
+            exit 1
+        fi
+        log_info "Running verification only..."
+        verify_setup
+        exit 0
+    fi
+
     validate_environment
     validate_clusters "$create_clusters"
     print_config
