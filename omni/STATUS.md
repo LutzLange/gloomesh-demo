@@ -1,6 +1,6 @@
 # Omni Workshop Status
 
-> **Last Updated**: 2026-01-08 09:25 UTC
+> **Last Updated**: 2026-01-12 (successful test run, failover fix, Istio config sync)
 
 This file tracks the operational status of the Omni workshop, including test results, known issues, and version information. Claude Code should update this file after test runs and when issues are discovered or resolved.
 
@@ -12,7 +12,6 @@ This file tracks the operational status of the Omni workshop, including test res
 |-----------|---------|-------|
 | Gateway API | v1.4.0 | |
 | Gloo Gateway | 2.0.1 | |
-| Gloo Operator | 0.4.2 | |
 | Istio (Solo) | 1.28.1 | Uses `-solo` suffix |
 | Gloo Platform | 2.11.0 | |
 | Kubernetes | GKE 1.33.5-gke.1308000 | Tested on GKE |
@@ -25,13 +24,13 @@ This file tracks the operational status of the Omni workshop, including test res
 
 | Field | Value |
 |-------|-------|
-| **Date** | 2026-01-06 11:52 UTC |
-| **Tester** | Claude Code |
+| **Date** | 2026-01-12 |
+| **Tester** | Lutz (manual) |
 | **Clusters** | lutzl-cluster1 (europe-west3-a), lutzl-cluster2 (europe-west2-a) |
 | **Tests Passed** | 32 |
 | **Tests Failed** | 0 |
-| **Duration** | ~30 minutes (fresh GKE clusters + full setup + tests) |
-| **Notes** | Fresh cluster deployment from scratch. All 32 tests passed including multi-cluster tracing on both clusters. |
+| **Duration** | Full workshop test |
+| **Notes** | All 32 tests passed including fixed failover test. Global service hostname corrected to mesh.internal. |
 
 ### Test Run History
 
@@ -39,6 +38,7 @@ This file tracks the operational status of the Omni workshop, including test res
 
 | Date | Result | Passed/Failed | Notes |
 |------|--------|---------------|-------|
+| 2026-01-12 | PASS | 32/0 | **All tests passed.** Fixed global failover test - hostname changed from svc.cluster.local to mesh.internal. Synced omni.md Istio configs with setup.sh. |
 | 2026-01-08 09:25 | PASS | 31/1 | Fresh GKE clusters. Failover test timing issue (HTTP 503). All other tests passed including full tracing. |
 | 2026-01-06 11:52 | PASS | 32/0 | **Fresh GKE clusters from scratch**. Full setup + workshop + tracing. All services traced. |
 | 2026-01-06 10:35 | PASS | 32/0 | Full workshop + tracing. Multi-cluster tracing config verified on both clusters. |
@@ -87,6 +87,11 @@ This file tracks the operational status of the Omni workshop, including test res
 
 | Date | Change | Components Affected |
 |------|--------|---------------------|
+| 2026-01-12 | **Fixed global failover test**: Changed Backend hostname from `productpage.bookinfo.svc.cluster.local` to `productpage.bookinfo.mesh.internal`. K8s DNS (svc.cluster.local) only resolves to local ClusterIP; mesh.internal uses Istio DNS proxy to resolve to Mesh VIP (240.240.0.x) enabling cross-cluster routing via east-west gateway. | test-workshop.sh, omni.md |
+| 2026-01-12 | Synced Istio Helm configs in omni.md with setup.sh: All istiod, istio-cni, and ztunnel settings now match exactly | omni.md |
+| 2026-01-09 | ~~Fixed Backend hostname: Changed from mesh.internal to svc.cluster.local~~ **INCORRECT - reverted 2026-01-12** | test-workshop.sh |
+| 2026-01-09 | Removed unused Gloo Operator: operator was installed but never used (Istio deployed via Helm, multi-cluster peering via istioctl). Removed from setup.sh, omni.md, STATUS.md | setup.sh, omni.md, STATUS.md |
+| 2026-01-09 | Synced omni.md with setup.sh: Fixed setup.sh path, updated Step 5 to show Helm-based Istio installation (matching actual implementation), fixed cert paths to use ./certs/, added working directory note | omni.md |
 | 2026-01-08 | Added timing guidance to omni.md: 30s failover wait, 10s routing propagation, LoadBalancer IP wait | omni.md |
 | 2026-01-08 | Fixed failover test timing: increased wait from 15s to 30s, retries from 5 to 10 | test-workshop.sh |
 | 2026-01-08 | Moved progress file from /tmp to repo directory (.workshop-progress); cleanup.sh now deletes progress file | test-lib.sh, test-workshop.sh, cleanup.sh, .gitignore |

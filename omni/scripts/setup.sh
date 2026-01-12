@@ -75,7 +75,6 @@ set_defaults() {
     export ISTIO_VERSION="${ISTIO_VERSION:-1.28.1}"
     export GATEWAY_API_VERSION="${GATEWAY_API_VERSION:-v1.4.0}"
     export GLOO_GATEWAY_VERSION="${GLOO_GATEWAY_VERSION:-2.0.1}"
-    export GLOO_OPERATOR_VERSION="${GLOO_OPERATOR_VERSION:-0.4.2}"
     # Note: GKE_ZONE1/GKE_ZONE2 are optional - only needed if clusters need to be created
 }
 
@@ -234,7 +233,6 @@ print_config() {
     log_info "  GLOO_VERSION: $GLOO_VERSION"
     log_info "  ISTIO_VERSION: $ISTIO_VERSION"
     log_info "  GLOO_GATEWAY_VERSION: $GLOO_GATEWAY_VERSION"
-    log_info "  GLOO_OPERATOR_VERSION: $GLOO_OPERATOR_VERSION"
 }
 
 wait_for_deployment() {
@@ -381,29 +379,8 @@ configure_trust() {
     done
 }
 
-install_gloo_operator() {
-    log_step "Step 5: Installing Gloo Operator (for multi-cluster peering)"
-
-    log_info "Installing Gloo Operator on both clusters..."
-    for context in "$CLUSTER1" "$CLUSTER2"; do
-        helm upgrade --install --kube-context="$context" gloo-operator \
-            oci://us-docker.pkg.dev/solo-public/gloo-operator-helm/gloo-operator \
-            --version "$GLOO_OPERATOR_VERSION" \
-            -n gloo-mesh \
-            --create-namespace \
-            --set manager.env.SOLO_ISTIO_LICENSE_KEY="$GLOO_MESH_LICENSE_KEY" &
-    done
-    wait
-
-    log_info "Waiting for Gloo Operator pods..."
-    wait_for_deployment "$CLUSTER1" "gloo-mesh" "gloo-operator"
-    wait_for_deployment "$CLUSTER2" "gloo-mesh" "gloo-operator"
-
-    log_success "Gloo Operator installed on both clusters"
-}
-
 deploy_istio_ambient() {
-    log_info "Deploying Istio Ambient via Helm..."
+    log_step "Step 5: Installing Istio Ambient"
 
     # Solo.io Istio Helm repository (public builds)
     local HELM_REPO="us-docker.pkg.dev/soloio-img/istio-helm"
@@ -483,7 +460,6 @@ meshConfig:
   trustDomain: cluster.local
   defaultConfig:
     proxyMetadata:
-      ISTIO_META_DNS_AUTO_ALLOCATE: "true"
       ISTIO_META_DNS_CAPTURE: "true"
   serviceScopeConfigs:
   - scope: GLOBAL
@@ -782,7 +758,6 @@ main() {
     install_gloo_gateway
     create_ingress_gateway
     configure_trust
-    install_gloo_operator
     deploy_istio_ambient
     install_gloo_platform
     register_cluster2

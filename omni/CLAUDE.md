@@ -64,7 +64,6 @@ The Omni workshop deploys a two-cluster Gloo Platform environment:
 |-----------|---------|---------|
 | Gateway API | v1.4.0 | Kubernetes Gateway API CRDs |
 | Gloo Gateway | 2.0.1 | North-South ingress, API Gateway |
-| Gloo Operator | 0.4.2 | Istio lifecycle management |
 | Istio (Solo) | 1.28.1 | Ambient mesh (ztunnel + waypoints) |
 | Gloo Platform | 2.11.0 | Multi-cluster management, observability |
 
@@ -119,7 +118,7 @@ The workshop is organized into setup and demo checkpoints:
 | setup-2 | Install Gloo Gateway v2 |
 | setup-3 | Create Ingress Gateway |
 | setup-4 | Configure Trust (shared root CA) |
-| setup-5 | Install Gloo Operator + Istio Ambient |
+| setup-5 | Install Istio Ambient |
 | setup-6 | Install Gloo Management Plane |
 | setup-7 | Register Cluster2 |
 

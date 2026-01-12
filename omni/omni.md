@@ -117,7 +117,9 @@ flowchart TB
 
 ## Prerequisites & Setup
 
-> **Automated Setup Available:** Run `./omni/setup.sh` to execute all setup steps automatically.
+> **Working Directory:** All commands in this guide assume you are running from the `omni/` directory.
+>
+> **Automated Setup Available:** Run `./scripts/setup.sh -c env.sh` to execute all setup steps automatically.
 >
 > The script will install all components and verify the environment is ready for the demo.
 
@@ -127,7 +129,6 @@ flowchart TB
 |-----------|---------|
 | Gateway API | v1.4.0 |
 | Gloo Gateway | 2.0.1 |
-| Gloo Operator | 0.4.2 |
 | Istio (Solo distribution) | 1.28.1 |
 | Gloo Platform | 2.11.0 |
 
@@ -207,63 +208,177 @@ for context in ${CLUSTER1} ${CLUSTER2}; do
 done
 
 kubectl --context=${CLUSTER1} create secret generic cacerts -n istio-system \
-  --from-file=./omni/certs/cluster1/ca-cert.pem \
-  --from-file=./omni/certs/cluster1/ca-key.pem \
-  --from-file=./omni/certs/cluster1/root-cert.pem \
-  --from-file=./omni/certs/cluster1/cert-chain.pem
+  --from-file=./certs/cluster1/ca-cert.pem \
+  --from-file=./certs/cluster1/ca-key.pem \
+  --from-file=./certs/cluster1/root-cert.pem \
+  --from-file=./certs/cluster1/cert-chain.pem
 
 kubectl --context=${CLUSTER2} create secret generic cacerts -n istio-system \
-  --from-file=./omni/certs/cluster2/ca-cert.pem \
-  --from-file=./omni/certs/cluster2/ca-key.pem \
-  --from-file=./omni/certs/cluster2/root-cert.pem \
-  --from-file=./omni/certs/cluster2/cert-chain.pem
+  --from-file=./certs/cluster2/ca-cert.pem \
+  --from-file=./certs/cluster2/ca-key.pem \
+  --from-file=./certs/cluster2/root-cert.pem \
+  --from-file=./certs/cluster2/cert-chain.pem
 ```
 
-#### 5. Install Gloo Operator + Istio Ambient
+> **Note:** Run these commands from the `omni/` directory where the `certs/` folder is located.
+
+#### 5. Install Istio Ambient
+
+Deploy Istio Ambient via Helm on each cluster. This approach provides explicit control over ztunnel L7 features and egress policies:
 
 ```bash
-# Install Gloo Operator on both clusters
-for context in ${CLUSTER1} ${CLUSTER2}; do
-  helm upgrade --install --kube-context=${context} gloo-operator \
-    oci://us-docker.pkg.dev/solo-public/gloo-operator-helm/gloo-operator \
-    --version 0.4.2 \
-    -n gloo-mesh \
-    --create-namespace \
-    --set manager.env.SOLO_ISTIO_LICENSE_KEY=${GLOO_MESH_LICENSE_KEY} &
+# Solo.io Istio Helm repository
+export HELM_REPO="us-docker.pkg.dev/soloio-img/istio-helm"
+export ISTIO_IMAGE="${ISTIO_VERSION}-solo"
+export ISTIO_HUB="us-docker.pkg.dev/soloio-img/istio"
+
+# For each cluster (cluster1 and cluster2):
+for entry in "cluster1:${CLUSTER1}" "cluster2:${CLUSTER2}"; do
+  CLUSTER_NAME="${entry%%:*}"
+  CONTEXT="${entry##*:}"
+
+  # Get K8s API server IP for egress passthrough
+  K8S_API_IP=$(kubectl --context "$CONTEXT" get svc kubernetes -o jsonpath='{.spec.clusterIP}')
+
+  # Create ResourceQuota for GKE critical pods
+  kubectl --context "$CONTEXT" apply -f - <<EOF
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: gcp-critical-pods
+  namespace: istio-system
+spec:
+  hard:
+    pods: "1000"
+  scopeSelector:
+    matchExpressions:
+    - operator: In
+      scopeName: PriorityClass
+      values:
+      - system-node-critical
+      - system-cluster-critical
+EOF
+
+  # Add network topology label
+  kubectl --context "$CONTEXT" label namespace istio-system topology.istio.io/network=${CLUSTER_NAME} --overwrite
+
+  # Install istio-base CRDs
+  helm upgrade --install istio-base oci://${HELM_REPO}/base \
+    --namespace istio-system --kube-context "$CONTEXT" \
+    --version "${ISTIO_IMAGE}" \
+    --set defaultRevision=default --set profile=ambient --wait
+
+  # Install istiod control plane
+  helm upgrade --install istiod oci://${HELM_REPO}/istiod \
+    --namespace istio-system --kube-context "$CONTEXT" \
+    --version "${ISTIO_IMAGE}" --wait \
+    -f - <<EOF
+global:
+  hub: ${ISTIO_HUB}
+  tag: ${ISTIO_IMAGE}
+  proxy:
+    clusterDomain: cluster.local
+  logAsJson: true
+  network: ${CLUSTER_NAME}
+  meshID: mesh1
+  multiCluster:
+    clusterName: ${CLUSTER_NAME}
+meshConfig:
+  accessLogFile: /dev/stdout
+  rootNamespace: istio-system
+  trustDomain: cluster.local
+  defaultConfig:
+    proxyMetadata:
+      ISTIO_META_DNS_CAPTURE: "true"
+  serviceScopeConfigs:
+  - scope: GLOBAL
+    servicesSelector:
+      matchExpressions:
+      - key: istio.io/global
+        operator: In
+        values:
+        - "true"
+pilot:
+  env:
+    PILOT_ENABLE_AMBIENT: "true"
+    PILOT_ENABLE_IP_AUTOALLOCATE: "true"
+    PILOT_SKIP_VALIDATE_TRUST_DOMAIN: "true"
+    AUTO_RELOAD_PLUGIN_CERTS: "true"
+  cni:
+    namespace: istio-system
+    enabled: true
+profile: ambient
+license:
+  value: ${GLOO_MESH_LICENSE_KEY}
+platforms:
+  peering:
+    enabled: true
+EOF
+
+  # Install istio-cni (GKE platform settings)
+  helm upgrade --install istio-cni oci://${HELM_REPO}/cni \
+    --namespace istio-system --kube-context "$CONTEXT" \
+    --version "${ISTIO_IMAGE}" --wait \
+    -f - <<EOF
+ambient:
+  dnsCapture: true
+excludeNamespaces:
+- istio-system
+- kube-system
+global:
+  hub: ${ISTIO_HUB}
+  tag: ${ISTIO_IMAGE}
+  platform: gke
+cni:
+  cniBinDir: /home/kubernetes/bin
+  cniConfDir: /etc/cni/net.d
+profile: ambient
+EOF
+
+  # Install ztunnel with L7 telemetry and egress policies
+  helm upgrade --install ztunnel oci://${HELM_REPO}/ztunnel \
+    --namespace istio-system --kube-context "$CONTEXT" \
+    --version "${ISTIO_IMAGE}" --wait \
+    -f - <<EOF
+hub: ${ISTIO_HUB}
+tag: ${ISTIO_IMAGE}
+istioNamespace: istio-system
+profile: ambient
+network: ${CLUSTER_NAME}
+multiCluster:
+  clusterName: ${CLUSTER_NAME}
+env:
+  L7_ENABLED: "true"
+l7Telemetry:
+  enabled: true
+  metrics:
+    enabled: true
+  accessLog:
+    enabled: true
+    skipConnectionLog: false
+  distributedTracing:
+    enabled: true
+    otlpEndpoint: "http://gloo-telemetry-collector.gloo-mesh:4317"
+egressPolicies:
+  # Allow passthrough for Kubernetes API server and private networks
+  - matchCidrs:
+    - ${K8S_API_IP}/32
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    policy: Passthrough
+  # Default: passthrough for all other traffic
+  - matchCidrs:
+    - 0.0.0.0/0
+    - ::/0
+    policy: Passthrough
+EOF
 done
-wait
-
-# Deploy Istio via ServiceMeshController
-kubectl --context=${CLUSTER1} apply -n gloo-mesh -f - <<EOF
-apiVersion: operator.gloo.solo.io/v1
-kind: ServiceMeshController
-metadata:
-  name: managed-istio
-  labels:
-    app.kubernetes.io/name: managed-istio
-spec:
-  cluster: cluster1
-  network: cluster1
-  dataplaneMode: Ambient
-  installNamespace: istio-system
-  version: ${ISTIO_VERSION}
-EOF
-
-kubectl --context=${CLUSTER2} apply -n gloo-mesh -f - <<EOF
-apiVersion: operator.gloo.solo.io/v1
-kind: ServiceMeshController
-metadata:
-  name: managed-istio
-  labels:
-    app.kubernetes.io/name: managed-istio
-spec:
-  cluster: cluster2
-  network: cluster2
-  dataplaneMode: Ambient
-  installNamespace: istio-system
-  version: ${ISTIO_VERSION}
-EOF
 ```
+
+> **Note:** The Helm-based installation provides explicit control over:
+> - **L7 Telemetry:** ztunnel distributed tracing to Gloo telemetry collector
+> - **Egress Policies:** Passthrough for K8s API and internal services
+> - **Multi-cluster:** Unique cluster names and network identities for peering
 
 #### 6. Install Gloo Management Plane
 
@@ -316,7 +431,6 @@ helm upgrade -i gloo-platform gloo-platform/gloo-platform \
 > **Note:** The `telemetryCollectorCustomization.pipelines.traces/istio.enabled=true` setting automatically:
 > - Creates a `gloo-telemetry-collector-tracing` service
 > - Injects an `otel-tracing` extensionProvider into Istio's mesh config
-> - No manual `meshConfig` configuration is needed in the ServiceMeshController
 
 #### 7. Register Cluster2 as Workload Cluster
 
