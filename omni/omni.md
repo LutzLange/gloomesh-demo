@@ -115,15 +115,11 @@ flowchart TB
 
 ---
 
-## Prerequisites & Setup
+## Workshop Setup
 
 > **Working Directory:** All commands in this guide assume you are running from the `omni/` directory.
->
-> **Automated Setup Available:** Run `./scripts/setup.sh -c env.sh` to execute all setup steps automatically.
->
-> The script will install all components and verify the environment is ready for the demo.
 
-### Environment
+### Component Versions
 
 | Component | Version |
 |-----------|---------|
@@ -132,359 +128,105 @@ flowchart TB
 | Istio (Solo distribution) | 1.28.1 |
 | Gloo Platform | 2.11.0 |
 
-### Required Environment Variables
+### Step 1: Create Your Environment Configuration
 
-Create an `env.sh` file with your cluster contexts and versions:
+Create an `env.sh` file with your cluster details and license keys:
 
 ```bash
+cat > env.sh << 'EOF'
+# Cluster kubectl contexts
 export CLUSTER1=<your-cluster1-context>   # e.g., lutzl-cluster1
 export CLUSTER2=<your-cluster2-context>   # e.g., lutzl-cluster2
+
+# Component versions
 export ISTIO_VERSION=1.28.1
 export GLOO_VERSION=2.11.0
-export GLOO_GATEWAY_LICENSE_KEY=<your-key>
-export GLOO_MESH_LICENSE_KEY=<your-key>
 
-# Solo istioctl (installed by the operator, or download manually)
+# License keys (obtain from Solo.io)
+export GLOO_GATEWAY_LICENSE_KEY=<your-gateway-key>
+export GLOO_MESH_LICENSE_KEY=<your-mesh-key>
+
+# Solo istioctl path (will be set after installation)
 export ISTIOCTL=/home/$USER/.istioctl/bin/istioctl
+EOF
 ```
 
-Source the environment before starting:
+Then load the environment:
+
 ```bash
 source env.sh
 ```
 
-### Setup Steps (Script-Ready)
+### Step 2: Run Automated Setup
 
-#### 1. Install Gateway API CRDs
+The setup script installs all components on both clusters:
+- Gateway API CRDs
+- Gloo Gateway v2 (North-South ingress)
+- Shared trust certificates for multi-cluster mTLS
+- Istio Ambient Mesh (ztunnel + waypoint support)
+- Gloo Platform Management Plane (UI, telemetry, Jaeger)
+- Cluster 2 registration
+
+Run the setup:
 
 ```bash
-kubectl --context ${CLUSTER1} apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.0/standard-install.yaml
+./scripts/setup.sh -c env.sh
 ```
 
-#### 2. Install Gloo Gateway v2
+**Setup takes approximately 10-15 minutes.** The script will:
+1. Validate your environment configuration
+2. Install all components in the correct order
+3. Wait for deployments to be ready
+4. Verify the installation
+5. Display the Gloo Gateway IP address
+
+> **Need GKE clusters?** Add `--create-clusters` flag and set `GKE_ZONE1`/`GKE_ZONE2` in your env.sh:
+> ```bash
+> ./scripts/setup.sh -c env.sh --create-clusters
+> ```
+
+### Step 3: Verify Setup Complete
+
+After the script completes, verify all components are running:
 
 ```bash
-helm upgrade -i --create-namespace --namespace gloo-system \
-  --kube-context ${CLUSTER1} \
-  --version 2.0.1 \
-  gloo-gateway-crds oci://us-docker.pkg.dev/solo-public/gloo-gateway/charts/gloo-gateway-crds
-
-helm upgrade -i -n gloo-system gloo-gateway \
-  oci://us-docker.pkg.dev/solo-public/gloo-gateway/charts/gloo-gateway \
-  --kube-context ${CLUSTER1} \
-  --version 2.0.1 \
-  --set licensing.glooGatewayLicenseKey=$GLOO_GATEWAY_LICENSE_KEY
-```
-
-#### 3. Create Gateway for Ingress
-
-```bash
-kubectl --context=${CLUSTER1} apply -f - <<EOF
-kind: Gateway
-apiVersion: gateway.networking.k8s.io/v1
-metadata:
-  name: http
-  namespace: gloo-system
-spec:
-  gatewayClassName: gloo-gateway-v2
-  listeners:
-  - protocol: HTTP
-    port: 80
-    name: http
-    allowedRoutes:
-      namespaces:
-        from: All
-EOF
-
-export GLOO_IP=$(kubectl get svc -n gloo-system http --context $CLUSTER1 -o jsonpath="{.status.loadBalancer.ingress[0]['hostname','ip']}") && echo $GLOO_IP
-```
-
-#### 4. Configure Trust (Shared Root CA)
-
-```bash
-for context in ${CLUSTER1} ${CLUSTER2}; do
-  kubectl --context=${context} create ns istio-system || true
-  kubectl --context=${context} create ns istio-gateways || true
-done
-
-kubectl --context=${CLUSTER1} create secret generic cacerts -n istio-system \
-  --from-file=./certs/cluster1/ca-cert.pem \
-  --from-file=./certs/cluster1/ca-key.pem \
-  --from-file=./certs/cluster1/root-cert.pem \
-  --from-file=./certs/cluster1/cert-chain.pem
-
-kubectl --context=${CLUSTER2} create secret generic cacerts -n istio-system \
-  --from-file=./certs/cluster2/ca-cert.pem \
-  --from-file=./certs/cluster2/ca-key.pem \
-  --from-file=./certs/cluster2/root-cert.pem \
-  --from-file=./certs/cluster2/cert-chain.pem
-```
-
-> **Note:** Run these commands from the `omni/` directory where the `certs/` folder is located.
-
-#### 5. Install Istio Ambient
-
-Deploy Istio Ambient via Helm on each cluster. This approach provides explicit control over ztunnel L7 features and egress policies:
-
-```bash
-# Solo.io Istio Helm repository
-export HELM_REPO="us-docker.pkg.dev/soloio-img/istio-helm"
-export ISTIO_IMAGE="${ISTIO_VERSION}-solo"
-export ISTIO_HUB="us-docker.pkg.dev/soloio-img/istio"
-
-# For each cluster (cluster1 and cluster2):
-for entry in "cluster1:${CLUSTER1}" "cluster2:${CLUSTER2}"; do
-  CLUSTER_NAME="${entry%%:*}"
-  CONTEXT="${entry##*:}"
-
-  # Get K8s API server IP for egress passthrough
-  K8S_API_IP=$(kubectl --context "$CONTEXT" get svc kubernetes -o jsonpath='{.spec.clusterIP}')
-
-  # Create ResourceQuota for GKE critical pods
-  kubectl --context "$CONTEXT" apply -f - <<EOF
-apiVersion: v1
-kind: ResourceQuota
-metadata:
-  name: gcp-critical-pods
-  namespace: istio-system
-spec:
-  hard:
-    pods: "1000"
-  scopeSelector:
-    matchExpressions:
-    - operator: In
-      scopeName: PriorityClass
-      values:
-      - system-node-critical
-      - system-cluster-critical
-EOF
-
-  # Add network topology label
-  kubectl --context "$CONTEXT" label namespace istio-system topology.istio.io/network=${CLUSTER_NAME} --overwrite
-
-  # Install istio-base CRDs
-  helm upgrade --install istio-base oci://${HELM_REPO}/base \
-    --namespace istio-system --kube-context "$CONTEXT" \
-    --version "${ISTIO_IMAGE}" \
-    --set defaultRevision=default --set profile=ambient --wait
-
-  # Install istiod control plane
-  helm upgrade --install istiod oci://${HELM_REPO}/istiod \
-    --namespace istio-system --kube-context "$CONTEXT" \
-    --version "${ISTIO_IMAGE}" --wait \
-    -f - <<EOF
-global:
-  hub: ${ISTIO_HUB}
-  tag: ${ISTIO_IMAGE}
-  proxy:
-    clusterDomain: cluster.local
-  logAsJson: true
-  network: ${CLUSTER_NAME}
-  meshID: mesh1
-  multiCluster:
-    clusterName: ${CLUSTER_NAME}
-meshConfig:
-  accessLogFile: /dev/stdout
-  rootNamespace: istio-system
-  trustDomain: cluster.local
-  defaultConfig:
-    proxyMetadata:
-      ISTIO_META_DNS_CAPTURE: "true"
-  serviceScopeConfigs:
-  - scope: GLOBAL
-    servicesSelector:
-      matchExpressions:
-      - key: istio.io/global
-        operator: In
-        values:
-        - "true"
-pilot:
-  env:
-    PILOT_ENABLE_AMBIENT: "true"
-    PILOT_ENABLE_IP_AUTOALLOCATE: "true"
-    PILOT_SKIP_VALIDATE_TRUST_DOMAIN: "true"
-    AUTO_RELOAD_PLUGIN_CERTS: "true"
-  cni:
-    namespace: istio-system
-    enabled: true
-profile: ambient
-license:
-  value: ${GLOO_MESH_LICENSE_KEY}
-platforms:
-  peering:
-    enabled: true
-EOF
-
-  # Install istio-cni (GKE platform settings)
-  helm upgrade --install istio-cni oci://${HELM_REPO}/cni \
-    --namespace istio-system --kube-context "$CONTEXT" \
-    --version "${ISTIO_IMAGE}" --wait \
-    -f - <<EOF
-ambient:
-  dnsCapture: true
-excludeNamespaces:
-- istio-system
-- kube-system
-global:
-  hub: ${ISTIO_HUB}
-  tag: ${ISTIO_IMAGE}
-  platform: gke
-cni:
-  cniBinDir: /home/kubernetes/bin
-  cniConfDir: /etc/cni/net.d
-profile: ambient
-EOF
-
-  # Install ztunnel with L7 telemetry and egress policies
-  helm upgrade --install ztunnel oci://${HELM_REPO}/ztunnel \
-    --namespace istio-system --kube-context "$CONTEXT" \
-    --version "${ISTIO_IMAGE}" --wait \
-    -f - <<EOF
-hub: ${ISTIO_HUB}
-tag: ${ISTIO_IMAGE}
-istioNamespace: istio-system
-profile: ambient
-network: ${CLUSTER_NAME}
-multiCluster:
-  clusterName: ${CLUSTER_NAME}
-env:
-  L7_ENABLED: "true"
-l7Telemetry:
-  enabled: true
-  metrics:
-    enabled: true
-  accessLog:
-    enabled: true
-    skipConnectionLog: false
-  distributedTracing:
-    enabled: true
-    otlpEndpoint: "http://gloo-telemetry-collector.gloo-mesh:4317"
-egressPolicies:
-  # Allow passthrough for Kubernetes API server and private networks
-  - matchCidrs:
-    - ${K8S_API_IP}/32
-    - 10.0.0.0/8
-    - 172.16.0.0/12
-    policy: Passthrough
-  # Default: passthrough for all other traffic
-  - matchCidrs:
-    - 0.0.0.0/0
-    - ::/0
-    policy: Passthrough
-EOF
-done
-```
-
-> **Note:** The Helm-based installation provides explicit control over:
-> - **L7 Telemetry:** ztunnel distributed tracing to Gloo telemetry collector
-> - **Egress Policies:** Passthrough for K8s API and internal services
-> - **Multi-cluster:** Unique cluster names and network identities for peering
-
-#### 6. Install Gloo Management Plane
-
-```bash
-helm repo add gloo-platform https://storage.googleapis.com/gloo-platform/helm-charts
-helm repo update
-
-# Adopt CRDs if Gloo Gateway already installed
-kubectl --context ${CLUSTER1} annotate crd authconfigs.extauth.solo.io \
-  meta.helm.sh/release-name=gloo-platform-crds \
-  meta.helm.sh/release-namespace=gloo-mesh \
-  --overwrite
-
-helm upgrade -i gloo-platform-crds gloo-platform/gloo-platform-crds \
-  -n gloo-mesh \
-  --kube-context ${CLUSTER1} \
-  --create-namespace \
-  --version ${GLOO_VERSION}
-
-# IMPORTANT: Create KubernetesCluster CR for cluster1 BEFORE installing gloo-platform
-# This allows the agent to connect immediately without CrashLoop
-kubectl --context ${CLUSTER1} apply -f - <<EOF
-apiVersion: admin.gloo.solo.io/v2
-kind: KubernetesCluster
-metadata:
-  name: cluster1
-  namespace: gloo-mesh
-spec:
-  clusterDomain: cluster.local
-EOF
-
-helm upgrade -i gloo-platform gloo-platform/gloo-platform \
-  -n gloo-mesh \
-  --kube-context ${CLUSTER1} \
-  --version ${GLOO_VERSION} \
-  --set common.cluster=cluster1 \
-  --set licensing.glooMeshLicenseKey=$GLOO_MESH_LICENSE_KEY \
-  --set glooMgmtServer.enabled=true \
-  --set glooUi.enabled=true \
-  --set glooInsightsEngine.enabled=true \
-  --set glooAgent.enabled=true \
-  --set prometheus.enabled=true \
-  --set telemetryGateway.enabled=true \
-  --set telemetryCollector.enabled=true \
-  --set jaeger.enabled=true \
-  --set 'telemetryGatewayCustomization.pipelines.traces/jaeger.enabled=true' \
-  --set 'telemetryCollectorCustomization.pipelines.traces/istio.enabled=true'
-```
-
-> **Note:** The `telemetryCollectorCustomization.pipelines.traces/istio.enabled=true` setting automatically:
-> - Creates a `gloo-telemetry-collector-tracing` service
-> - Injects an `otel-tracing` extensionProvider into Istio's mesh config
-
-#### 7. Register Cluster2 as Workload Cluster
-
-Get the telemetry gateway address from cluster1:
-
-```bash
-export TELEMETRY_GATEWAY_ADDRESS=$(kubectl get svc -n gloo-mesh gloo-telemetry-gateway --context $CLUSTER1 -o jsonpath="{.status.loadBalancer.ingress[0]['hostname','ip']}"):4317
-echo "Telemetry Gateway: $TELEMETRY_GATEWAY_ADDRESS"
-```
-
-Use `meshctl cluster register` to register cluster2. This automatically:
-- Creates the KubernetesCluster CR on cluster1
-- Installs gloo-platform-crds and gloo-platform charts on cluster2
-- Configures TLS certificates for secure relay communication
-
-```bash
-# Install meshctl if not already installed
-curl -sL https://run.solo.io/meshctl/install | GLOO_MESH_VERSION=v${GLOO_VERSION} sh -
-export PATH=$HOME/.gloo-mesh/bin:$PATH
-
-# Register cluster2
-meshctl cluster register cluster2 \
-  --kubecontext $CLUSTER1 \
-  --profiles gloo-mesh-agent \
-  --remote-context $CLUSTER2 \
-  --telemetry-server-address $TELEMETRY_GATEWAY_ADDRESS
-```
-
-> **Note:** The Helm-based approach for cluster registration requires manual TLS secret setup and is not recommended. meshctl handles all TLS secrets (`relay-client-tls-secret`, `relay-root-tls-secret`, `relay-identity-token-secret`) automatically.
-
-### Verify Setup
-
-```bash
-# Cluster1 pods running
-kubectl --context ${CLUSTER1} get pods -n gloo-system
-kubectl --context ${CLUSTER1} get pods -n gloo-mesh
-kubectl --context ${CLUSTER1} get pods -n istio-system
-
-# Cluster2 pods running
-kubectl --context ${CLUSTER2} get pods -n gloo-mesh
-kubectl --context ${CLUSTER2} get pods -n istio-system
-
 # Both clusters registered
 kubectl --context ${CLUSTER1} get kubernetesclusters -n gloo-mesh
-# Expected: cluster1 ACCEPTED, cluster2 ACCEPTED
+```
 
+Expected output:
+```
+NAME       AGE
+cluster1   10m
+cluster2   5m
+```
+
+```bash
 # GatewayClasses available
 kubectl --context ${CLUSTER1} get gatewayclasses
-# Expected: gloo-gateway-v2, istio, istio-waypoint, istio-eastwest
+```
 
-# Management UI accessible
+Expected output should include: `gloo-gateway-v2`, `istio`, `istio-waypoint`, `istio-eastwest`
+
+### Step 4: Export Gateway IP
+
+Set the Gloo Gateway IP for use during the demo:
+
+```bash
+export GLOO_IP=$(kubectl get svc -n gloo-system http --context $CLUSTER1 -o jsonpath="{.status.loadBalancer.ingress[0]['hostname','ip']}")
+echo "Gloo Gateway IP: $GLOO_IP"
+```
+
+### Access the Management UI
+
+```bash
 kubectl --context ${CLUSTER1} port-forward -n gloo-mesh svc/gloo-mesh-ui 8090:8090 &
 open http://localhost:8090
 ```
+
+---
+
+> **Prefer manual setup?** See the [Manual Setup Guide](setup.md) for step-by-step instructions with detailed explanations of each command. This is useful for learning, troubleshooting, or customizing the installation.
 
 ---
 
