@@ -412,8 +412,6 @@ helm upgrade --install istiod oci://${HELM_REPO}/istiod \
 global:
   hub: ${ISTIO_HUB}
   tag: ${ISTIO_IMAGE}
-  proxy:
-    clusterDomain: cluster.local
   logAsJson: true
   network: cluster1
   meshID: mesh1
@@ -421,21 +419,7 @@ global:
     clusterName: cluster1
 meshConfig:
   accessLogFile: /dev/stdout
-  rootNamespace: istio-system
-  trustDomain: cluster.local
-  serviceScopeConfigs:
-  - scope: GLOBAL
-    servicesSelector:
-      matchExpressions:
-      - key: istio.io/global
-        operator: In
-        values:
-        - "true"
 pilot:
-  env:
-    PILOT_ENABLE_AMBIENT: "true"
-    PILOT_SKIP_VALIDATE_TRUST_DOMAIN: "true"
-    AUTO_RELOAD_PLUGIN_CERTS: "true"
   cni:
     namespace: istio-system
     enabled: true
@@ -455,12 +439,8 @@ EOF
 | [`global.network`](https://istio.io/latest/docs/setup/install/multicluster/multi-primary_multi-network/) | Unique network identifier | Clusters with different networks need east-west gateways |
 | [`global.meshID`](https://istio.io/latest/docs/ops/deployment/deployment-models/#multiple-meshes) | Groups clusters into a logical mesh | All clusters sharing services **must** use the same meshID |
 | [`multiCluster.clusterName`](https://istio.io/latest/docs/setup/install/multicluster/) | Unique cluster identifier | Used for service discovery and routing decisions |
-| [`meshConfig.trustDomain`](https://istio.io/latest/docs/reference/glossary/#trust-domain) | [SPIFFE](https://spiffe.io/) trust domain for service identities | Affects mTLS certificate URIs (e.g., `spiffe://cluster.local/ns/default/sa/myapp`) |
 | [`meshConfig.accessLogFile`](https://istio.io/latest/docs/tasks/observability/logs/access-log/) | Path for access logs | Set to `/dev/stdout` for container logging; remove for no logs |
-| [`PILOT_ENABLE_AMBIENT`](https://istio.io/latest/docs/ambient/install/helm/) | Enables ambient mesh mode | Required for ztunnel-based mesh |
-| [`PILOT_SKIP_VALIDATE_TRUST_DOMAIN`](https://istio.io/latest/docs/ops/common-problems/security-issues/) | Skips trust domain validation | Required when clusters have different trust configurations |
-| [`AUTO_RELOAD_PLUGIN_CERTS`](https://istio.io/latest/docs/tasks/security/cert-management/plugin-ca-cert/) | Hot-reloads CA certificates | Allows cert rotation without istiod restart |
-| [`serviceScopeConfigs`](https://docs.solo.io/gloo-mesh-enterprise/main/routing/global/) | Configures global service scope | Services labeled `istio.io/global=true` become multi-cluster addressable |
+| [`profile: ambient`](https://istio.io/latest/docs/ambient/install/helm/) | Istio installation profile | Enables ambient mode with ztunnel, sets defaults for `serviceScopeConfigs`, `PILOT_ENABLE_AMBIENT`, etc. |
 | [`platforms.peering.enabled`](https://docs.solo.io/gloo-mesh-enterprise/main/istio/) | Solo.io multi-cluster peering | Enables cross-cluster service discovery features |
 
 > ⚠️ **If you change `meshID`:** All clusters in a multi-cluster mesh **must** share the same `meshID`. Using different values will prevent cross-cluster service discovery.
@@ -645,8 +625,6 @@ helm upgrade --install istiod oci://${HELM_REPO}/istiod \
 global:
   hub: ${ISTIO_HUB}
   tag: ${ISTIO_IMAGE}
-  proxy:
-    clusterDomain: cluster.local
   logAsJson: true
   network: cluster2
   meshID: mesh1
@@ -654,21 +632,7 @@ global:
     clusterName: cluster2
 meshConfig:
   accessLogFile: /dev/stdout
-  rootNamespace: istio-system
-  trustDomain: cluster.local
-  serviceScopeConfigs:
-  - scope: GLOBAL
-    servicesSelector:
-      matchExpressions:
-      - key: istio.io/global
-        operator: In
-        values:
-        - "true"
 pilot:
-  env:
-    PILOT_ENABLE_AMBIENT: "true"
-    PILOT_SKIP_VALIDATE_TRUST_DOMAIN: "true"
-    AUTO_RELOAD_PLUGIN_CERTS: "true"
   cni:
     namespace: istio-system
     enabled: true

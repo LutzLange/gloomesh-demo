@@ -447,31 +447,14 @@ EOF
 global:
   hub: ${ISTIO_HUB}
   tag: ${ISTIO_IMAGE}
-  proxy:
-    clusterDomain: cluster.local
   logAsJson: true
   network: ${cluster_name}
   meshID: mesh1
   multiCluster:
-    # Unique cluster name for multi-cluster identity
     clusterName: ${cluster_name}
 meshConfig:
   accessLogFile: /dev/stdout
-  rootNamespace: istio-system
-  trustDomain: cluster.local
-  serviceScopeConfigs:
-  - scope: GLOBAL
-    servicesSelector:
-      matchExpressions:
-      - key: istio.io/global
-        operator: In
-        values:
-        - "true"
 pilot:
-  env:
-    PILOT_ENABLE_AMBIENT: "true"
-    PILOT_SKIP_VALIDATE_TRUST_DOMAIN: "true"
-    AUTO_RELOAD_PLUGIN_CERTS: "true"
   cni:
     namespace: istio-system
     enabled: true
