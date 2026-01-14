@@ -31,6 +31,7 @@ source "$SCRIPT_DIR/test-lib.sh"
 # Workshop Steps Definition
 # ================================================
 # These are the demo steps AFTER setup.sh has run
+# Step names match omni.md section headers
 WORKSHOP_STEPS=(
     "deploy_bookinfo"
     "expose_ingress"
@@ -47,10 +48,113 @@ WORKSHOP_STEPS=(
     "test_rate_limiting"
 )
 
+# Human-readable descriptions matching omni.md headers
+declare -A STEP_DESCRIPTIONS=(
+    ["deploy_bookinfo"]="Deploy Bookinfo"
+    ["expose_ingress"]="Expose via Ingress"
+    ["verify_no_mesh"]="Verify Application (Not Yet in Mesh)"
+    ["add_to_mesh"]="Add to Mesh"
+    ["verify_mesh"]="Verify Mesh Enrollment"
+    ["peer_clusters"]="Peer Clusters"
+    ["add_gloo_to_mesh"]="Add Gloo Gateway to Mesh"
+    ["verify_observability"]="Verify Observability"
+    ["enable_global_services"]="Enable Global Services"
+    ["test_failover"]="Test Failover"
+    ["deploy_waypoint"]="Deploy Waypoint"
+    ["canary_routing"]="Canary Routing"
+    ["test_rate_limiting"]="Rate Limiting"
+    ["enable_tracing"]="Enable Tracing (Optional)"
+)
+
+# Part groupings matching omni.md structure
+declare -A STEP_PARTS=(
+    ["deploy_bookinfo"]="Part 1: Onboarding"
+    ["expose_ingress"]="Part 1: Onboarding"
+    ["verify_no_mesh"]="Part 1: Onboarding"
+    ["add_to_mesh"]="Part 1: Onboarding"
+    ["verify_mesh"]="Part 2: Zero-Trust Security"
+    ["peer_clusters"]="Part 2: Zero-Trust Security"
+    ["add_gloo_to_mesh"]="Part 2: Zero-Trust Security"
+    ["verify_observability"]="Part 3: Observability"
+    ["enable_global_services"]="Part 4: Global Services"
+    ["test_failover"]="Part 4: Global Services"
+    ["deploy_waypoint"]="Part 5: Canary & Rate Limiting"
+    ["canary_routing"]="Part 5: Canary & Rate Limiting"
+    ["test_rate_limiting"]="Part 5: Canary & Rate Limiting"
+    ["enable_tracing"]="Optional"
+)
+
 # Optional steps (not run by default)
 OPTIONAL_STEPS=(
     "enable_tracing"  # Run with: --tracing flag
 )
+
+# ================================================
+# List Steps Function
+# ================================================
+list_workshop_steps() {
+    echo ""
+    echo "=============================================="
+    echo "     OMNI WORKSHOP STEPS (matches omni.md)"
+    echo "=============================================="
+    echo ""
+
+    local current_part=""
+    local num=1
+
+    for step in "${WORKSHOP_STEPS[@]}"; do
+        local part="${STEP_PARTS[$step]}"
+        local desc="${STEP_DESCRIPTIONS[$step]}"
+        local status
+
+        # Print part header when it changes
+        if [[ "$part" != "$current_part" ]]; then
+            if [[ -n "$current_part" ]]; then
+                echo ""
+            fi
+            echo -e "${BLUE}${part}${NC}"
+            echo "----------------------------------------------"
+            current_part="$part"
+        fi
+
+        # Determine status
+        if step_completed "$step"; then
+            status="${GREEN}[done]${NC}"
+        else
+            status="${YELLOW}[pending]${NC}"
+        fi
+
+        printf "  Step %2d: %-40s " "$num" "$desc"
+        echo -e "$status"
+        ((num++))
+    done
+
+    # Optional steps
+    echo ""
+    echo -e "${BLUE}Optional${NC}"
+    echo "----------------------------------------------"
+    for step in "${OPTIONAL_STEPS[@]}"; do
+        local desc="${STEP_DESCRIPTIONS[$step]}"
+        local status
+        if step_completed "$step"; then
+            status="${GREEN}[done]${NC}"
+        else
+            status="${YELLOW}[pending]${NC}"
+        fi
+        printf "  Step %2d: %-40s " "$num" "$desc"
+        echo -e "$status"
+        ((num++))
+    done
+
+    echo ""
+    echo "=============================================="
+    echo ""
+    echo "Usage examples:"
+    echo "  $0 -c env.sh -s 5              # Start from step 5"
+    echo "  $0 -c env.sh -s verify_mesh    # Start from step by name"
+    echo "  $0 -c env.sh --stop-after 10   # Stop after step 10"
+    echo ""
+}
 
 # ================================================
 # Configuration
@@ -62,34 +166,31 @@ usage() {
     echo "  -c, --config FILE       Load configuration from FILE (default: ../env.sh)"
     echo "  --create-clusters       Create GKE clusters if needed"
     echo "  --skip-setup            Skip running setup.sh (assume already done)"
-    echo "  -s, --step STEP         Start from a specific step (name or number)"
+    echo "  -s, --step STEP         Start from a specific step (number or name)"
     echo "  --stop-after STEP       Stop after completing a specific step"
-    echo "  -l, --list              List all steps and their completion status"
+    echo "  -l, --list              List all steps with numbers and descriptions"
     echo "  --reset                 Clear progress and start fresh"
     echo "  -t, --tests-only        Skip all setup, run verification tests only"
-    echo "  --skip-tracing          Skip the optional tracing configuration step"
+    echo "  --skip-tracing          Skip the optional tracing step (Step 14)"
     echo "  -d, --delete            Cleanup after tests complete"
     echo "  -h, --help              Show this help message"
     echo ""
-    echo "Steps (run in order):"
+    echo "Steps (matching omni.md):"
     local num=1
     for step in "${WORKSHOP_STEPS[@]}"; do
-        printf "  %2d. %s\n" "$num" "$step"
+        local desc="${STEP_DESCRIPTIONS[$step]}"
+        printf "  Step %2d: %s\n" "$num" "$desc"
         ((num++))
     done
-    echo ""
-    echo "Optional Steps (run by default after workshop steps):"
-    for step in "${OPTIONAL_STEPS[@]}"; do
-        printf "      %s (skip with --skip-tracing)\n" "$step"
-    done
+    printf "  Step %2d: %s\n" "$num" "${STEP_DESCRIPTIONS[enable_tracing]}"
     echo ""
     echo "Examples:"
-    echo "  $0 -c env.sh                           # Run full workshop + tracing"
-    echo "  $0 -c env.sh --skip-tracing            # Run workshop without tracing"
-    echo "  $0 -c env.sh --create-clusters         # Create clusters + run workshop"
-    echo "  $0 -c env.sh -s deploy_waypoint        # Start from waypoint step"
-    echo "  $0 -c env.sh --stop-after add_to_mesh  # Run up to add_to_mesh"
-    echo "  $0 -c env.sh -l                        # Show progress"
+    echo "  $0 -c env.sh                    # Run full workshop (Steps 1-14)"
+    echo "  $0 -c env.sh --skip-tracing     # Run Steps 1-13 only"
+    echo "  $0 -c env.sh -s 5               # Start from Step 5"
+    echo "  $0 -c env.sh -s verify_mesh     # Start from step by name"
+    echo "  $0 -c env.sh --stop-after 10    # Stop after Step 10"
+    echo "  $0 -c env.sh -l                 # Show all steps with status"
     exit 0
 }
 
@@ -212,7 +313,7 @@ load_config() {
 # ================================================
 
 do_deploy_bookinfo() {
-    log_step "1. Deploy Bookinfo Application"
+    log_step "Step 1: Deploy Bookinfo"
 
     for context in ${CLUSTER1} ${CLUSTER2}; do
         log_info "Deploying to $context..."
@@ -231,7 +332,7 @@ do_deploy_bookinfo() {
 }
 
 do_expose_ingress() {
-    log_step "2. Expose via Ingress (HTTPRoute)"
+    log_step "Step 2: Expose via Ingress"
 
     # Create Static Backend to route via Service VIP (critical for waypoint routing)
     # Gloo Gateway uses EDS which would otherwise target pod IPs directly
@@ -288,7 +389,7 @@ EOF
 }
 
 do_verify_no_mesh() {
-    log_step "3. Verify Application Works (Not Yet in Mesh)"
+    log_step "Step 3: Verify Application (Not Yet in Mesh)"
 
     set +e
     test_http_endpoint "http://${GLOO_IP}/productpage" "200" "Productpage accessible"
@@ -296,7 +397,7 @@ do_verify_no_mesh() {
 }
 
 do_add_to_mesh() {
-    log_step "4. Add to Mesh - One Label"
+    log_step "Step 4: Add to Mesh"
 
     # Add namespace to ambient mesh
     kubectl --context ${CLUSTER1} label namespace bookinfo istio.io/dataplane-mode=ambient --overwrite
@@ -311,7 +412,7 @@ do_add_to_mesh() {
 }
 
 do_verify_mesh() {
-    log_step "5. Verify Mesh Enrollment"
+    log_step "Step 5: Verify Mesh Enrollment"
 
     set +e
 
@@ -365,7 +466,7 @@ do_verify_mesh() {
 }
 
 do_peer_clusters() {
-    log_step "6. Peer Clusters (East-West Gateway)"
+    log_step "Step 6: Peer Clusters"
 
     local ISTIOCTL="${ISTIOCTL:-$HOME/.istioctl/bin/istioctl}"
 
@@ -469,7 +570,7 @@ do_peer_clusters() {
 }
 
 do_add_gloo_to_mesh() {
-    log_step "7. Add Gloo Gateway to Mesh"
+    log_step "Step 7: Add Gloo Gateway to Mesh"
 
     # With ztunnel configured with proper egressPolicies for K8s API passthrough,
     # the gateway can be fully included in the ambient mesh without exclusions.
@@ -512,7 +613,7 @@ do_add_gloo_to_mesh() {
 }
 
 do_verify_observability() {
-    log_step "8. Verify Observability"
+    log_step "Step 8: Verify Observability"
 
     set +e
 
@@ -554,7 +655,7 @@ do_verify_observability() {
 }
 
 do_enable_global_services() {
-    log_step "9. Enable Global Services"
+    log_step "Step 9: Enable Global Services"
 
     for context in ${CLUSTER1} ${CLUSTER2}; do
         kubectl --context ${context} -n bookinfo label service productpage solo.io/service-scope=global --overwrite
@@ -580,7 +681,7 @@ EOF
 }
 
 do_test_failover() {
-    log_step "10. Test Multi-Cluster Failover"
+    log_step "Step 10: Test Failover"
 
     set +e
 
@@ -650,7 +751,7 @@ do_test_failover() {
 }
 
 do_deploy_waypoint() {
-    log_step "11. Deploy Waypoint for L7 Policies"
+    log_step "Step 11: Deploy Waypoint"
 
     for ctx in ${CLUSTER1} ${CLUSTER2}; do
         kubectl --context ${ctx} apply -f - <<EOF
@@ -683,7 +784,7 @@ EOF
 }
 
 do_canary_routing() {
-    log_step "12. Canary Routing"
+    log_step "Step 12: Canary Routing"
 
     for ctx in ${CLUSTER1} ${CLUSTER2}; do
         kubectl --context ${ctx} apply -f - <<EOF
@@ -770,7 +871,7 @@ EOF
 }
 
 do_test_rate_limiting() {
-    log_step "13. Rate Limiting"
+    log_step "Step 13: Rate Limiting"
 
     # Apply rate limit policy
     kubectl --context ${CLUSTER1} apply -f - <<EOF
@@ -839,7 +940,7 @@ EOF
 # Configures tracing for: Gloo Gateway, Waypoint proxies, Mesh extensionProvider
 
 do_enable_tracing() {
-    log_step "14. Optional: Enable Full Distributed Tracing"
+    log_step "Step 14: Enable Tracing (Optional)"
 
     log_info "Configuring distributed tracing for:"
     log_info "  - ztunnel L7 tracing (Solo Enterprise)"
@@ -1381,17 +1482,43 @@ print_header() {
     log_info "CLUSTER1: $CLUSTER1"
     log_info "CLUSTER2: $CLUSTER2"
     if [ -n "$START_FROM_STEP" ]; then
-        log_info "Starting from step: $START_FROM_STEP"
+        local step_num=$(get_step_number "$START_FROM_STEP")
+        local step_desc="${STEP_DESCRIPTIONS[$START_FROM_STEP]}"
+        log_info "Starting from: Step $step_num - $step_desc"
     fi
     if [ -n "$STOP_AFTER_STEP" ]; then
-        log_info "Stopping after step: $STOP_AFTER_STEP"
+        local step_num=$(get_step_number "$STOP_AFTER_STEP")
+        local step_desc="${STEP_DESCRIPTIONS[$STOP_AFTER_STEP]}"
+        log_info "Stopping after: Step $step_num - $step_desc"
     fi
     if [ "$SKIP_TRACING" = true ]; then
-        log_info "Tracing: SKIPPED (--skip-tracing)"
+        log_info "Tracing: SKIPPED (Step 14)"
     else
-        log_info "Tracing: ENABLED (will configure after workshop steps)"
+        log_info "Tracing: ENABLED (Step 14)"
     fi
     echo ""
+}
+
+# Helper to get step number from step name
+get_step_number() {
+    local target="$1"
+    local num=1
+    for step in "${WORKSHOP_STEPS[@]}"; do
+        if [[ "$step" == "$target" ]]; then
+            echo "$num"
+            return
+        fi
+        ((num++))
+    done
+    # Check optional steps
+    for step in "${OPTIONAL_STEPS[@]}"; do
+        if [[ "$step" == "$target" ]]; then
+            echo "$num"
+            return
+        fi
+        ((num++))
+    done
+    echo "?"
 }
 
 main() {
@@ -1401,7 +1528,7 @@ main() {
 
     # Handle --list option
     if [ "$LIST_STEPS" = true ]; then
-        list_steps "${WORKSHOP_STEPS[@]}"
+        list_workshop_steps
         exit 0
     fi
 

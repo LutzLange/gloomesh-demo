@@ -241,7 +241,7 @@ open http://localhost:8090
 
 ---
 
-## 1. Onboarding an Application
+## Part 1: Onboarding an Application
 
 ### Why This Matters
 
@@ -255,7 +255,7 @@ open http://localhost:8090
 
 > 💡 **Business Impact:** Organizations report up to **92% infrastructure cost reduction** compared to sidecar-based mesh, plus dramatically faster onboarding — from weeks to minutes.
 
-### Deploy the Application
+### Step 1: Deploy Bookinfo
 
 We'll use Bookinfo as our sample application. These images include OpenTelemetry instrumentation for application-level tracing.
 
@@ -271,7 +271,7 @@ Verify pods are running:
 kubectl --context ${CLUSTER1} get pods -n bookinfo
 ```
 
-### Expose via Ingress
+### Step 2: Expose via Ingress
 
 First, create a Static Backend to route through the Service VIP. This is critical because Gloo Gateway uses EDS (Endpoint Discovery Service) which would otherwise target pod IPs directly, bypassing the waypoint proxy:
 
@@ -327,6 +327,8 @@ EOF
 
 > **Why Static Backend?** Gloo Gateway normally uses EDS to discover pod IPs directly. Using a Static Backend forces traffic through the Service VIP, which then routes through ztunnel and waypoint proxies for proper L7 policy enforcement and tracing.
 
+### Step 3: Verify Application (Not Yet in Mesh)
+
 Test access:
 ```bash
 open http://${GLOO_IP}/productpage
@@ -334,7 +336,7 @@ open http://${GLOO_IP}/productpage
 
 At this point, the application works but **is not in the mesh** — no mTLS, no observability. This is a security gap that traditional approaches take weeks to close.
 
-### Add to Mesh — One Label
+### Step 4: Add to Mesh
 
 ```bash
 # Add namespace to ambient mesh
@@ -361,7 +363,7 @@ kubectl --context ${CLUSTER1} logs -n istio-system -l app=ztunnel --tail=5 | gre
 
 ---
 
-## 2. Zero-Trust Security: mTLS & Cluster Peering
+## Part 2: Zero-Trust Security
 
 ### Why This Matters
 
@@ -375,7 +377,7 @@ kubectl --context ${CLUSTER1} logs -n istio-system -l app=ztunnel --tail=5 | gre
 
 > 💡 **Business Impact:** Meet compliance requirements (PCI-DSS, HIPAA, SOC2) for encryption-in-transit automatically. Security teams get L7 visibility into all service-to-service communication without application changes.
 
-### Verify mTLS is Active
+### Step 5: Verify Mesh Enrollment
 
 In ambient mode, ztunnel handles all mTLS — workload pods don't have certificate files mounted. Verify traffic is encrypted by checking ztunnel logs for HBONE connections:
 
@@ -389,7 +391,7 @@ kubectl --context ${CLUSTER1} logs -n istio-system -l app=ztunnel --tail=50 | gr
 
 You should see log entries showing traffic being handled by ztunnel with source and destination identities.
 
-### Peer the Clusters
+### Step 6: Peer Clusters
 
 Enable cross-cluster communication with encrypted east-west gateways:
 
@@ -412,7 +414,7 @@ kubectl --context ${CLUSTER1} get gateways -n istio-gateways
 
 **Result:** Services can now discover and communicate across clusters — all mTLS-encrypted, no VPNs or complex network setup required.
 
-### Also Add Gloo Gateway to the Mesh
+### Step 7: Add Gloo Gateway to Mesh
 
 ```bash
 kubectl --context ${CLUSTER1} label namespace gloo-system istio.io/dataplane-mode=ambient
@@ -422,7 +424,7 @@ Now ingress traffic is mTLS-encrypted end-to-end from client to service.
 
 ---
 
-## 3. Observability in the Management UI
+## Part 3: Observability
 
 ### Why This Matters
 
@@ -430,7 +432,7 @@ Platform teams managing multiple clusters need unified visibility — not fragme
 
 > 💡 **Solo Enterprise Advantage:** Get L7 observability (HTTP methods, paths, status codes) from ztunnel *without* deploying waypoint proxies. Open source Istio only provides L4 metrics at this layer.
 
-### Access the Gloo UI
+### Step 8: Verify Observability
 
 ```bash
 kubectl --context ${CLUSTER1} port-forward -n gloo-mesh svc/gloo-mesh-ui 8090:8090
@@ -446,7 +448,7 @@ The UI shows:
 
 ### Distributed Tracing (Optional)
 
-> **Note:** Full distributed tracing requires additional configuration. See [Optional: Full Distributed Tracing](#optional-full-distributed-tracing) at the end of this guide.
+> **Note:** Full distributed tracing requires additional configuration. See [Step 14: Enable Tracing](#step-14-enable-tracing-optional) at the end of this guide.
 
 Once tracing is configured, navigate to **Tracing** in the sidebar to view request flows across services.
 
@@ -461,7 +463,7 @@ Navigate to **Insights** to see automatic recommendations:
 
 ---
 
-## 4. Global Service Failover & Distribution
+## Part 4: Global Services
 
 ### Why This Matters
 
@@ -469,7 +471,7 @@ Running services across multiple clusters is table stakes for resilience, but tr
 
 > 💡 **Business Impact:** Achieve multi-region high availability without managing separate DNS entries or load balancer configurations per service.
 
-### Enable Global Services
+### Step 9: Enable Global Services
 
 Make productpage available as a global service across both clusters:
 
@@ -479,8 +481,6 @@ for context in ${CLUSTER1} ${CLUSTER2}; do
   kubectl --context ${context} -n bookinfo annotate service productpage networking.istio.io/traffic-distribution=Any
 done
 ```
-
-### Update Backend for Global Hostname
 
 Update the Static Backend to use the global mesh hostname:
 
@@ -502,7 +502,7 @@ EOF
 
 The HTTPRoute continues to use the same Backend reference — no changes needed there.
 
-### Test Multi-Cluster Load Balancing
+### Step 10: Test Failover
 
 ```bash
 open http://${GLOO_IP}/productpage
@@ -518,9 +518,7 @@ for ctx in ${CLUSTER1} ${CLUSTER2}; do
 done
 ```
 
-### Simulate Failover
-
-Scale down productpage on cluster1:
+**Simulate Failover:** Scale down productpage on cluster1:
 ```bash
 kubectl --context ${CLUSTER1} scale deploy productpage-v1 -n bookinfo --replicas=0
 ```
@@ -536,7 +534,7 @@ kubectl --context ${CLUSTER1} scale deploy productpage-v1 -n bookinfo --replicas
 
 ---
 
-## 5. Canary Deployments & Rate Limiting
+## Part 5: Canary & Rate Limiting
 
 ### Why This Matters
 
@@ -544,7 +542,7 @@ Traditional API gateways were designed before Kubernetes — they require extern
 
 > 💡 **One API, Full Stack:** The same HTTPRoute and policy resources work across ingress and mesh. Platform teams define guardrails once; dev teams get self-service canary deployments and traffic control.
 
-### Deploy Waypoint for L7 Policies
+### Step 11: Deploy Waypoint
 
 Waypoints enable advanced L7 traffic management for specific services:
 
@@ -576,9 +574,9 @@ Wait ~10 seconds for the routing rules to propagate before testing.
 
 #### Enable Tracing on Waypoints (Optional)
 
-To see detailed traces through the waypoint proxy in Jaeger, see [Optional: Full Distributed Tracing](#optional-full-distributed-tracing) at the end of this guide.
+To see detailed traces through the waypoint proxy in Jaeger, see [Step 14: Enable Tracing](#step-14-enable-tracing-optional) at the end of this guide.
 
-### Canary Routing: Route by User
+### Step 12: Canary Routing
 
 Route user "jason" to reviews-v2 (with stars), everyone else to reviews-v1 (no stars):
 
@@ -613,7 +611,7 @@ done
 
 Wait ~10 seconds for the routing rules to propagate.
 
-### Test Canary Routing
+**Test Canary Routing:**
 
 1. Open `http://${GLOO_IP}/productpage`
 2. **Without login:** No stars (reviews-v1)
@@ -635,7 +633,7 @@ Expected responses:
 - **reviews-v1**: No `"color"` field in the ratings section (no stars displayed)
 - **reviews-v2**: Contains `"color": "black"` (black stars displayed)
 
-### Rate Limiting: Protect Your APIs
+### Step 13: Rate Limiting
 
 Apply a rate limit to productpage (5 requests/minute):
 
@@ -660,7 +658,7 @@ spec:
 EOF
 ```
 
-### Test Rate Limiting
+**Test Rate Limiting:**
 
 ```bash
 for i in {1..10}; do 
@@ -675,7 +673,7 @@ Expected: First 5 return `200`, remaining return `429 Too Many Requests`.
 
 > 🎯 **Demo Talking Point:** "We just added API protection with a simple Kubernetes resource — no separate rate limiting service, no external database. This same policy model works for OAuth, JWT validation, WAF, and more. Platform teams define the guardrails; dev teams get self-service within those boundaries."
 
-### Clean Up Rate Limit
+**Clean Up Rate Limit:**
 
 ```bash
 kubectl --context ${CLUSTER1} delete glootrafficpolicy productpage-ratelimit -n bookinfo
@@ -683,9 +681,9 @@ kubectl --context ${CLUSTER1} delete glootrafficpolicy productpage-ratelimit -n 
 
 ---
 
-## Optional: Full Distributed Tracing
+## Step 14: Enable Tracing (Optional)
 
-This section configures end-to-end distributed tracing across all components:
+This step configures end-to-end distributed tracing across all components:
 - **ztunnel** (L4/L7 proxy - Solo Enterprise feature)
 - **Gloo Gateway** (ingress)
 - **Waypoint proxies** (L7 policy enforcement)

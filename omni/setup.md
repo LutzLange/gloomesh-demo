@@ -90,9 +90,11 @@ Both commands should show cluster endpoint information. If you see connection er
 
 ## Step 1: Install Gateway API CRDs
 
-**What this does:** Installs the Kubernetes Gateway API Custom Resource Definitions (CRDs). The Gateway API is the next-generation Kubernetes ingress specification, replacing the older Ingress resources with more expressive routing capabilities.
+**What this does:** Installs the [Kubernetes Gateway API](https://gateway-api.sigs.k8s.io/) Custom Resource Definitions (CRDs). The Gateway API is the next-generation Kubernetes ingress specification, replacing the older Ingress resources with more expressive routing capabilities.
 
-**Why this is needed:** Both Gloo Gateway and Istio Ambient use Gateway API for traffic management. The CRDs must be installed before any Gateway resources can be created.
+**Why this is needed:** Both Gloo Gateway and Istio Ambient use Gateway API for traffic management. The CRDs must be installed before any [Gateway](https://gateway-api.sigs.k8s.io/api-types/gateway/) or [HTTPRoute](https://gateway-api.sigs.k8s.io/api-types/httproute/) resources can be created.
+
+**Why v1.4.0:** This version includes stable support for [GatewayClass](https://gateway-api.sigs.k8s.io/api-types/gatewayclass/), Gateway, and HTTPRoute resources. It also includes the HBONE protocol listener type used by Istio waypoints.
 
 Install on **Cluster 1**:
 
@@ -123,13 +125,13 @@ Expected output should include:
 
 ## Step 2: Install Gloo Gateway v2
 
-**What this does:** Deploys Solo.io's Gloo Gateway v2, an enterprise API gateway built on Envoy proxy. It provides north-south ingress with advanced features like authentication, rate limiting, and traffic policies.
+**What this does:** Deploys [Solo.io's Gloo Gateway v2](https://docs.solo.io/gateway/latest/), an enterprise API gateway built on Envoy proxy. It provides north-south ingress with advanced features like authentication, rate limiting, and traffic policies.
 
-**Why Gloo Gateway v2:** Unlike traditional API gateways, Gloo Gateway is Kubernetes-native and uses the Gateway API specification. It integrates seamlessly with Istio service mesh for unified north-south and east-west traffic management.
+**Why Gloo Gateway v2:** Unlike traditional API gateways, Gloo Gateway is Kubernetes-native and uses the [Gateway API specification](https://gateway-api.sigs.k8s.io/). It integrates seamlessly with Istio service mesh for unified north-south and east-west traffic management.
 
 ### Install Gloo Gateway CRDs
 
-First, install the Custom Resource Definitions:
+First, install the [Custom Resource Definitions](https://docs.solo.io/gateway/2.0.x/reference/helm/gloo-gateway-crds/):
 
 ```bash
 helm upgrade -i --create-namespace --namespace gloo-system \
@@ -138,11 +140,11 @@ helm upgrade -i --create-namespace --namespace gloo-system \
   gloo-gateway-crds oci://us-docker.pkg.dev/solo-public/gloo-gateway/charts/gloo-gateway-crds
 ```
 
-> **What `helm upgrade -i` does:** The `-i` flag means "install if not present, upgrade if exists." This makes the command idempotent - safe to run multiple times.
+> **What [`helm upgrade -i`](https://helm.sh/docs/helm/helm_upgrade/) does:** The `-i` flag means "install if not present, upgrade if exists." This makes the command idempotent - safe to run multiple times.
 
 ### Install Gloo Gateway
 
-Now install the gateway controller itself:
+Now install the [gateway controller](https://docs.solo.io/gateway/2.0.x/reference/helm/gloo-gateway/) itself:
 
 ```bash
 helm upgrade -i -n gloo-system gloo-gateway \
@@ -151,6 +153,10 @@ helm upgrade -i -n gloo-system gloo-gateway \
   --version 2.0.1 \
   --set licensing.glooGatewayLicenseKey=$GLOO_GATEWAY_LICENSE_KEY
 ```
+
+| Helm Value | Purpose |
+|------------|---------|
+| [`licensing.glooGatewayLicenseKey`](https://docs.solo.io/gateway/2.0.x/reference/helm/gloo-gateway/#licensing) | Enterprise license key for Gloo Gateway features |
 
 ### Wait for Deployment
 
@@ -172,11 +178,7 @@ You should see the `gloo-gateway-*` pod in Running state.
 
 ## Step 3: Create Gateway for Ingress
 
-**What this does:** Creates a Gateway resource that tells Gloo Gateway to provision a LoadBalancer service listening on port 80. This is your entry point for external traffic.
-
-**Why this configuration:**
-- `gatewayClassName: gloo-gateway-v2` - Selects the Gloo Gateway controller
-- `allowedRoutes.namespaces.from: All` - Allows any namespace to attach HTTPRoutes to this gateway (useful for multi-team environments)
+**What this does:** Creates a [Gateway resource](https://gateway-api.sigs.k8s.io/api-types/gateway/) that tells Gloo Gateway to provision a LoadBalancer service listening on port 80. This is your entry point for external traffic.
 
 ### Create the Gateway Resource
 
@@ -198,6 +200,17 @@ spec:
         from: All
 EOF
 ```
+
+### Configuration Explained
+
+| Field | Value | Purpose |
+|-------|-------|---------|
+| [`gatewayClassName`](https://gateway-api.sigs.k8s.io/api-types/gatewayclass/) | `gloo-gateway-v2` | Selects Gloo Gateway as the controller for this Gateway |
+| [`listeners[].protocol`](https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io/v1.ProtocolType) | `HTTP` | Protocol type. Options: `HTTP`, `HTTPS`, `TLS`, `TCP`, `UDP` |
+| [`listeners[].port`](https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io/v1.Listener) | `80` | Port number exposed on the LoadBalancer |
+| [`allowedRoutes.namespaces.from`](https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io/v1.AllowedRoutes) | `All` | Which namespaces can attach routes. Options: `All`, `Same`, `Selector` |
+
+> ⚠️ **Security Note:** Setting `allowedRoutes.namespaces.from: All` allows any namespace to attach HTTPRoutes to this gateway. In production multi-tenant environments, consider using `Selector` with specific namespace labels to restrict access.
 
 ### Wait for LoadBalancer IP
 
@@ -224,9 +237,34 @@ echo "Gloo Gateway IP: $GLOO_IP"
 
 ## Step 4: Configure Trust (Shared Root CA)
 
-**What this does:** Installs intermediate CA certificates on both clusters, all signed by the same root CA. This enables mTLS communication between services across clusters.
+**What this does:** Installs intermediate CA certificates on both clusters, all signed by the same root CA. This enables mTLS communication between services across clusters using [Istio's plug-in CA feature](https://istio.io/latest/docs/tasks/security/cert-management/plugin-ca-cert/).
 
-**Why this matters:** For multi-cluster mTLS to work, all clusters must trust each other's certificates. By using a shared root CA with per-cluster intermediate CAs, we establish a common trust domain while allowing each cluster to issue its own workload certificates.
+**Why this matters:** For multi-cluster mTLS to work, all clusters must trust each other's certificates. By using a shared root CA with per-cluster intermediate CAs, we establish a common [trust domain](https://istio.io/latest/docs/reference/glossary/#trust-domain) while allowing each cluster to issue its own workload certificates.
+
+> ⚠️ **Critical for Multi-Cluster:** If each cluster uses its own self-signed CA (the default), cross-cluster mTLS will fail with `CERTIFICATE_VERIFY_FAILED` errors. The shared root CA is **required** for multi-cluster communication.
+
+### How the Certificates Were Generated
+
+The certificates in `certs/` follow [Istio's plug-in CA guide](https://istio.io/latest/docs/tasks/security/cert-management/plugin-ca-cert/). The structure is:
+
+```
+Root CA (root-cert.pem) - Shared, kept offline
+├── Cluster1 Intermediate CA (cluster1/ca-cert.pem)
+│   └── Signs workload certificates for Cluster1
+└── Cluster2 Intermediate CA (cluster2/ca-cert.pem)
+    └── Signs workload certificates for Cluster2
+```
+
+To regenerate certificates (if needed):
+
+```bash
+# Generate root CA (do this once, keep secure)
+make -f istio.io/tools/certs/Makefile.selfsigned.mk root-ca
+
+# Generate intermediate CAs for each cluster
+make -f istio.io/tools/certs/Makefile.selfsigned.mk cluster1-cacerts
+make -f istio.io/tools/certs/Makefile.selfsigned.mk cluster2-cacerts
+```
 
 ### Create Namespaces
 
@@ -246,7 +284,7 @@ kubectl --context=${CLUSTER2} create ns istio-gateways 2>/dev/null || true
 
 ### Install Certificates on Cluster 1
 
-The certificates are pre-generated in the `certs/` directory. Install the Cluster 1 intermediate CA:
+The certificates are pre-generated in the `certs/` directory. Install the Cluster 1 intermediate CA as a Kubernetes secret named [`cacerts`](https://istio.io/latest/docs/tasks/security/cert-management/plugin-ca-cert/#plug-in-certificates-and-key-into-the-cluster):
 
 ```bash
 kubectl --context=${CLUSTER1} create secret generic cacerts -n istio-system \
@@ -256,7 +294,14 @@ kubectl --context=${CLUSTER1} create secret generic cacerts -n istio-system \
   --from-file=./certs/cluster1/cert-chain.pem
 ```
 
-> **Important:** Run this command from the `omni/` directory where the `certs/` folder is located.
+| File | Purpose |
+|------|---------|
+| `ca-cert.pem` | Intermediate CA certificate for this cluster |
+| `ca-key.pem` | Private key for the intermediate CA |
+| `root-cert.pem` | Root CA certificate (same across all clusters) |
+| `cert-chain.pem` | Full certificate chain from intermediate to root |
+
+> **Important:** Run this command from the `omni/` directory where the `certs/` folder is located. The secret **must** be named `cacerts` - Istio looks for this specific name.
 
 ### Install Certificates on Cluster 2
 
@@ -270,25 +315,13 @@ kubectl --context=${CLUSTER2} create secret generic cacerts -n istio-system \
   --from-file=./certs/cluster2/cert-chain.pem
 ```
 
-### Understanding the Certificate Structure
-
-```
-Root CA (shared)
-├── Cluster1 Intermediate CA
-│   └── Issues workload certificates for Cluster1
-└── Cluster2 Intermediate CA
-    └── Issues workload certificates for Cluster2
-```
-
-Both clusters can verify each other's certificates because they share the same root CA, but neither cluster can impersonate the other because they have different intermediate CAs.
-
 ---
 
 ## Step 5: Install Istio Ambient
 
-**What this does:** Deploys Istio Ambient Mesh on both clusters. Ambient is Istio's sidecarless architecture that uses:
-- **ztunnel:** A per-node proxy that handles L4 mTLS encryption for all pod traffic
-- **Waypoint proxies:** Optional L7 proxies for advanced traffic policies (deployed per-namespace)
+**What this does:** Deploys [Istio Ambient Mesh](https://istio.io/latest/docs/ambient/) on both clusters. Ambient is Istio's sidecarless architecture that uses:
+- **[ztunnel](https://istio.io/latest/docs/ambient/overview/#ztunnel):** A per-node proxy that handles L4 mTLS encryption for all pod traffic
+- **[Waypoint proxies](https://istio.io/latest/docs/ambient/overview/#waypoint-proxies):** Optional L7 proxies for advanced traffic policies (deployed per-namespace)
 
 **Why Ambient vs Sidecar:**
 - **No sidecar overhead:** Up to 92% cost reduction vs traditional sidecars
@@ -297,7 +330,7 @@ Both clusters can verify each other's certificates because they share the same r
 
 ### Set Istio Environment Variables
 
-These variables configure the Solo.io Istio distribution:
+These variables configure the [Solo.io Istio distribution](https://docs.solo.io/gloo-mesh-enterprise/main/istio/):
 
 ```bash
 export HELM_REPO="us-docker.pkg.dev/soloio-img/istio-helm"
@@ -305,7 +338,7 @@ export ISTIO_IMAGE="${ISTIO_VERSION}-solo"
 export ISTIO_HUB="us-docker.pkg.dev/soloio-img/istio"
 ```
 
-> **Why Solo.io distribution?** Solo's Istio includes enterprise features like L7 telemetry in ztunnel, FIPS-validated images, and 24/7 support. The `-solo` suffix identifies these builds.
+> **Why Solo.io distribution?** Solo's Istio includes enterprise features like L7 telemetry in ztunnel (without waypoints), FIPS-validated images, and 24/7 support. The `-solo` suffix identifies these builds. See the [Solo.io Istio documentation](https://docs.solo.io/gloo-mesh-enterprise/main/istio/manual/manual_deploy/).
 
 ---
 
@@ -350,13 +383,13 @@ EOF
 
 #### 5.1c: Add Network Topology Label (Cluster 1)
 
-Label the namespace for multi-cluster network identification:
+Label the namespace for [multi-cluster network identification](https://istio.io/latest/docs/setup/install/multicluster/multi-primary_multi-network/):
 
 ```bash
 kubectl --context ${CLUSTER1} label namespace istio-system topology.istio.io/network=cluster1 --overwrite
 ```
 
-> **Why this label?** Each cluster needs a unique network name for Istio's multi-cluster service discovery to route traffic correctly.
+> **Why this label?** The [`topology.istio.io/network`](https://istio.io/latest/docs/reference/config/labels/) label tells Istio which network each cluster is on. Clusters on different networks communicate through east-west gateways instead of direct pod-to-pod connections.
 
 #### 5.1d: Install Istio Base CRDs (Cluster 1)
 
@@ -390,9 +423,6 @@ meshConfig:
   accessLogFile: /dev/stdout
   rootNamespace: istio-system
   trustDomain: cluster.local
-  defaultConfig:
-    proxyMetadata:
-      ISTIO_META_DNS_CAPTURE: "true"
   serviceScopeConfigs:
   - scope: GLOBAL
     servicesSelector:
@@ -404,7 +434,6 @@ meshConfig:
 pilot:
   env:
     PILOT_ENABLE_AMBIENT: "true"
-    PILOT_ENABLE_IP_AUTOALLOCATE: "true"
     PILOT_SKIP_VALIDATE_TRUST_DOMAIN: "true"
     AUTO_RELOAD_PLUGIN_CERTS: "true"
   cni:
@@ -419,27 +448,32 @@ platforms:
 EOF
 ```
 
-**Key configuration explained:**
-| Setting | Purpose |
-|---------|---------|
-| `network: cluster1` | Unique network identifier for multi-cluster |
-| `clusterName: cluster1` | Unique cluster name for service discovery |
-| `PILOT_ENABLE_AMBIENT: "true"` | Enables ambient mesh mode |
-| `PILOT_ENABLE_IP_AUTOALLOCATE: "true"` | Assigns virtual IPs to services for DNS-based routing |
-| `serviceScopeConfigs` | Services labeled `istio.io/global=true` become globally addressable |
-| `platforms.peering.enabled: true` | Enables multi-cluster peering features |
+### istiod Configuration Deep Dive
+
+| Setting | Purpose | If Changed |
+|---------|---------|------------|
+| [`global.network`](https://istio.io/latest/docs/setup/install/multicluster/multi-primary_multi-network/) | Unique network identifier | Clusters with different networks need east-west gateways |
+| [`global.meshID`](https://istio.io/latest/docs/ops/deployment/deployment-models/#multiple-meshes) | Groups clusters into a logical mesh | All clusters sharing services **must** use the same meshID |
+| [`multiCluster.clusterName`](https://istio.io/latest/docs/setup/install/multicluster/) | Unique cluster identifier | Used for service discovery and routing decisions |
+| [`meshConfig.trustDomain`](https://istio.io/latest/docs/reference/glossary/#trust-domain) | [SPIFFE](https://spiffe.io/) trust domain for service identities | Affects mTLS certificate URIs (e.g., `spiffe://cluster.local/ns/default/sa/myapp`) |
+| [`meshConfig.accessLogFile`](https://istio.io/latest/docs/tasks/observability/logs/access-log/) | Path for access logs | Set to `/dev/stdout` for container logging; remove for no logs |
+| [`PILOT_ENABLE_AMBIENT`](https://istio.io/latest/docs/ambient/install/helm/) | Enables ambient mesh mode | Required for ztunnel-based mesh |
+| [`PILOT_SKIP_VALIDATE_TRUST_DOMAIN`](https://istio.io/latest/docs/ops/common-problems/security-issues/) | Skips trust domain validation | Required when clusters have different trust configurations |
+| [`AUTO_RELOAD_PLUGIN_CERTS`](https://istio.io/latest/docs/tasks/security/cert-management/plugin-ca-cert/) | Hot-reloads CA certificates | Allows cert rotation without istiod restart |
+| [`serviceScopeConfigs`](https://docs.solo.io/gloo-mesh-enterprise/main/routing/global/) | Configures global service scope | Services labeled `istio.io/global=true` become multi-cluster addressable |
+| [`platforms.peering.enabled`](https://docs.solo.io/gloo-mesh-enterprise/main/istio/) | Solo.io multi-cluster peering | Enables cross-cluster service discovery features |
+
+> ⚠️ **If you change `meshID`:** All clusters in a multi-cluster mesh **must** share the same `meshID`. Using different values will prevent cross-cluster service discovery.
 
 #### 5.1f: Install Istio CNI (Cluster 1)
 
-The CNI plugin intercepts pod traffic and redirects it to ztunnel:
+The [CNI plugin](https://istio.io/latest/docs/setup/additional-setup/cni/) intercepts pod traffic and redirects it to ztunnel:
 
 ```bash
 helm upgrade --install istio-cni oci://${HELM_REPO}/cni \
   --namespace istio-system --kube-context ${CLUSTER1} \
   --version "${ISTIO_IMAGE}" --wait \
   -f - <<EOF
-ambient:
-  dnsCapture: true
 excludeNamespaces:
 - istio-system
 - kube-system
@@ -454,7 +488,24 @@ profile: ambient
 EOF
 ```
 
-> **GKE-specific paths:** The `cniBinDir` and `cniConfDir` paths are specific to GKE. For other platforms (EKS, kind), these may differ.
+### CNI Configuration Explained
+
+| Setting | Purpose |
+|---------|---------|
+| [`excludeNamespaces`](https://istio.io/latest/docs/setup/additional-setup/cni/#excluding-namespaces) | Namespaces where CNI won't intercept traffic. `istio-system` is excluded to prevent circular dependencies; `kube-system` for system stability |
+| [`global.platform`](https://istio.io/latest/docs/ambient/install/helm/) | Platform-specific configuration. Enables GKE-specific workarounds and paths |
+| `cni.cniBinDir` / `cni.cniConfDir` | Platform-specific CNI paths (see table below) |
+
+> **Note:** DNS capture (`ambient.dnsCapture`) is enabled by default in Istio 1.25+ for ambient mode. No explicit configuration needed.
+
+**Platform-Specific CNI Paths:**
+
+| Platform | `cniBinDir` | `cniConfDir` |
+|----------|-------------|--------------|
+| **GKE** | `/home/kubernetes/bin` | `/etc/cni/net.d` |
+| **EKS** | `/opt/cni/bin` | `/etc/cni/net.d` |
+| **AKS** | `/opt/cni/bin` | `/etc/cni/net.d` |
+| **Kind/k3s** | `/opt/cni/bin` | `/etc/cni/net.d` |
 
 #### 5.1g: Install ztunnel (Cluster 1)
 
@@ -499,13 +550,40 @@ egressPolicies:
 EOF
 ```
 
-**Key configuration explained:**
+### ztunnel Configuration Deep Dive
+
 | Setting | Purpose |
 |---------|---------|
-| `L7_ENABLED: "true"` | Solo Enterprise feature: L7 visibility without waypoints |
-| `l7Telemetry` | Enables metrics, access logs, and distributed tracing |
-| `otlpEndpoint` | Sends traces to Gloo Platform's telemetry collector |
-| `egressPolicies` | Allows K8s API and internal traffic to bypass mTLS |
+| [`L7_ENABLED`](https://docs.solo.io/gloo-mesh-enterprise/main/observability/) | **Solo Enterprise feature:** Enables L7 visibility (HTTP method, path, status) without deploying waypoint proxies |
+| [`l7Telemetry.enabled`](https://docs.solo.io/gloo-mesh-enterprise/main/observability/telemetry/) | Enables metrics, access logs, and distributed tracing from ztunnel |
+| [`l7Telemetry.distributedTracing.otlpEndpoint`](https://docs.solo.io/gloo-mesh-enterprise/main/observability/traces/) | OTLP endpoint for traces. Points to Gloo Platform's telemetry collector (installed in Step 6) |
+| [`egressPolicies`](https://istio.io/latest/docs/ambient/usage/waypoint/#traffic-not-through-waypoints) | Controls which traffic bypasses mTLS encryption |
+
+### Understanding egressPolicies
+
+The [`egressPolicies`](https://artifacthub.io/packages/helm/istio-official/ztunnel) configuration tells ztunnel which traffic should **not** be intercepted for mTLS:
+
+```yaml
+egressPolicies:
+  - matchCidrs:
+    - ${K8S_API_IP}/32    # Kubernetes API server
+    - 10.0.0.0/8          # RFC1918 private networks (pods, services)
+    - 172.16.0.0/12       # RFC1918 private networks
+    policy: Passthrough
+  - matchCidrs:
+    - 0.0.0.0/0           # All other IPv4 traffic
+    - ::/0                # All IPv6 traffic
+    policy: Passthrough
+```
+
+| CIDR | Why Passthrough |
+|------|-----------------|
+| `${K8S_API_IP}/32` | Kubernetes API server must be accessible without mTLS for controller communication |
+| `10.0.0.0/8` | Internal pod/service network traffic (varies by cluster setup) |
+| `172.16.0.0/12` | Additional private network ranges used by some clusters |
+| `0.0.0.0/0` | Default passthrough for traffic not explicitly handled (external egress) |
+
+> ⚠️ **Note:** The `otlpEndpoint` points to `gloo-telemetry-collector.gloo-mesh:4317` which won't exist until Gloo Platform is installed in Step 6. Traces will be dropped until then, but this is expected.
 
 ---
 
@@ -578,9 +656,6 @@ meshConfig:
   accessLogFile: /dev/stdout
   rootNamespace: istio-system
   trustDomain: cluster.local
-  defaultConfig:
-    proxyMetadata:
-      ISTIO_META_DNS_CAPTURE: "true"
   serviceScopeConfigs:
   - scope: GLOBAL
     servicesSelector:
@@ -592,7 +667,6 @@ meshConfig:
 pilot:
   env:
     PILOT_ENABLE_AMBIENT: "true"
-    PILOT_ENABLE_IP_AUTOALLOCATE: "true"
     PILOT_SKIP_VALIDATE_TRUST_DOMAIN: "true"
     AUTO_RELOAD_PLUGIN_CERTS: "true"
   cni:
@@ -614,8 +688,6 @@ helm upgrade --install istio-cni oci://${HELM_REPO}/cni \
   --namespace istio-system --kube-context ${CLUSTER2} \
   --version "${ISTIO_IMAGE}" --wait \
   -f - <<EOF
-ambient:
-  dnsCapture: true
 excludeNamespaces:
 - istio-system
 - kube-system
@@ -696,11 +768,11 @@ Expected pods on each cluster:
 
 ## Step 6: Install Gloo Management Plane
 
-**What this does:** Deploys Solo.io's Gloo Platform, which provides:
-- **Unified UI** for multi-cluster observability
-- **Insights Engine** for configuration analysis
-- **Telemetry** collection and aggregation
-- **Distributed tracing** with Jaeger
+**What this does:** Deploys [Solo.io's Gloo Platform](https://docs.solo.io/gloo-mesh-enterprise/main/), which provides:
+- **[Unified UI](https://docs.solo.io/gloo-mesh-enterprise/main/observability/ui/)** for multi-cluster observability
+- **[Insights Engine](https://docs.solo.io/gloo-mesh-enterprise/main/observability/insights/)** for configuration analysis
+- **[Telemetry](https://docs.solo.io/gloo-mesh-enterprise/main/observability/telemetry/)** collection and aggregation
+- **[Distributed tracing](https://docs.solo.io/gloo-mesh-enterprise/main/observability/traces/)** with Jaeger
 
 **Why Gloo Platform:** While Istio handles the data plane (traffic), Gloo Platform provides the management plane - unified visibility, configuration insights, and enterprise features across all your clusters.
 
@@ -773,17 +845,27 @@ helm upgrade -i gloo-platform gloo-platform/gloo-platform \
   --set 'telemetryCollectorCustomization.pipelines.traces/istio.enabled=true'
 ```
 
-**Components enabled:**
-| Component | Purpose |
-|-----------|---------|
-| `glooMgmtServer` | Central management server for all clusters |
-| `glooUi` | Web-based management console |
-| `glooInsightsEngine` | Configuration analysis and recommendations |
-| `glooAgent` | Per-cluster agent that reports to mgmt server |
-| `prometheus` | Metrics collection |
-| `telemetryGateway` | Receives telemetry from remote clusters |
-| `telemetryCollector` | Aggregates traces and metrics |
-| `jaeger` | Distributed tracing backend |
+### Gloo Platform Components
+
+| Component | Purpose | Documentation |
+|-----------|---------|---------------|
+| [`glooMgmtServer`](https://docs.solo.io/gloo-mesh-enterprise/main/setup/installation/enterprise_installation/) | Central management server for all clusters | Coordinates configuration and policy across clusters |
+| [`glooUi`](https://docs.solo.io/gloo-mesh-enterprise/main/observability/ui/) | Web-based management console | Visual dashboard at `http://localhost:8090` |
+| [`glooInsightsEngine`](https://docs.solo.io/gloo-mesh-enterprise/main/observability/insights/) | Configuration analysis | Detects misconfigurations, security issues, best practice violations |
+| [`glooAgent`](https://docs.solo.io/gloo-mesh-enterprise/main/setup/installation/enterprise_installation/) | Per-cluster agent | Reports to mgmt server, applies policies locally |
+| [`prometheus`](https://docs.solo.io/gloo-mesh-enterprise/main/observability/metrics/) | Metrics collection | Scrapes Istio and application metrics |
+| [`telemetryGateway`](https://docs.solo.io/gloo-mesh-enterprise/main/observability/telemetry/) | Remote telemetry receiver | Accepts traces/metrics from workload clusters |
+| [`telemetryCollector`](https://docs.solo.io/gloo-mesh-enterprise/main/observability/telemetry/) | Telemetry aggregation | OpenTelemetry collector for traces and metrics |
+| [`jaeger`](https://docs.solo.io/gloo-mesh-enterprise/main/observability/traces/) | Distributed tracing backend | View traces at UI → Tracing tab |
+
+### Telemetry Pipeline Configuration
+
+The Helm values include custom telemetry pipelines:
+
+| Setting | Purpose |
+|---------|---------|
+| `telemetryGatewayCustomization.pipelines.traces/jaeger.enabled` | Routes incoming traces to Jaeger backend |
+| `telemetryCollectorCustomization.pipelines.traces/istio.enabled` | Collects Istio-specific trace data |
 
 ### Wait for Gloo Platform
 
@@ -811,12 +893,12 @@ Wait until all pods are Running. Key pods:
 
 ## Step 7: Register Cluster2 as Workload Cluster
 
-**What this does:** Registers Cluster 2 with the Gloo Platform management plane on Cluster 1. This enables:
+**What this does:** Registers Cluster 2 with the Gloo Platform management plane on Cluster 1 using [`meshctl cluster register`](https://docs.solo.io/gloo-mesh-enterprise/main/reference/cli/meshctl_cluster_register/). This enables:
 - Unified visibility across both clusters
 - Telemetry aggregation from Cluster 2
 - Policy synchronization
 
-**Why meshctl:** While manual Helm installation is possible, `meshctl` handles all the TLS certificate setup automatically, which is error-prone to do manually.
+**Why meshctl:** While manual Helm installation is possible, `meshctl` handles all the TLS certificate setup automatically, which is error-prone to do manually. See the [full CLI reference](https://docs.solo.io/gloo-mesh-enterprise/main/reference/cli/meshctl/).
 
 ### Get Telemetry Gateway Address
 
@@ -841,7 +923,7 @@ export PATH=$HOME/.gloo-mesh/bin:$PATH
 ### Register Cluster 2
 
 This command:
-1. Creates a KubernetesCluster CR on Cluster 1
+1. Creates a [KubernetesCluster CR](https://docs.solo.io/gloo-mesh-enterprise/main/reference/api/kubernetes_cluster/) on Cluster 1
 2. Installs gloo-platform-crds and gloo-platform charts on Cluster 2
 3. Configures TLS certificates for secure relay communication
 
@@ -852,6 +934,17 @@ meshctl cluster register cluster2 \
   --remote-context $CLUSTER2 \
   --telemetry-server-address $TELEMETRY_GATEWAY_ADDRESS
 ```
+
+### meshctl register Flags Explained
+
+| Flag | Purpose |
+|------|---------|
+| [`--kubecontext`](https://docs.solo.io/gloo-mesh-enterprise/main/reference/cli/meshctl_cluster_register/) | Context of the **management cluster** (where KubernetesCluster CR is created) |
+| [`--remote-context`](https://docs.solo.io/gloo-mesh-enterprise/main/reference/cli/meshctl_cluster_register/) | Context of the **workload cluster** being registered |
+| [`--profiles`](https://docs.solo.io/gloo-mesh-enterprise/main/reference/cli/meshctl_cluster_register/) | Helm profiles to install. `gloo-mesh-agent` installs only the agent (no mgmt server) |
+| [`--telemetry-server-address`](https://docs.solo.io/gloo-mesh-enterprise/main/reference/cli/meshctl_cluster_register/) | Address of telemetry gateway for trace/metric collection |
+
+> **What happens behind the scenes:** meshctl copies the root CA and bootstrap token from the management cluster, then installs the Gloo agent on the workload cluster. The agent uses mTLS to securely communicate with the management server.
 
 ### Wait for Agent Connection
 
@@ -989,3 +1082,65 @@ Your environment is now ready for the workshop demo. Return to the [Omni Demo Gu
 **Cause:** Missing ResourceQuota on GKE.
 
 **Solution:** Re-run step 5.1b/5.2b to create the ResourceQuota.
+
+---
+
+## Reference Documentation
+
+Quick links to upstream documentation for all components used in this workshop.
+
+### Kubernetes Gateway API
+
+| Resource | Documentation |
+|----------|---------------|
+| Gateway API Overview | [gateway-api.sigs.k8s.io](https://gateway-api.sigs.k8s.io/) |
+| GatewayClass | [GatewayClass API Type](https://gateway-api.sigs.k8s.io/api-types/gatewayclass/) |
+| Gateway | [Gateway API Type](https://gateway-api.sigs.k8s.io/api-types/gateway/) |
+| HTTPRoute | [HTTPRoute API Type](https://gateway-api.sigs.k8s.io/api-types/httproute/) |
+| API Spec Reference | [Full Spec](https://gateway-api.sigs.k8s.io/reference/spec/) |
+
+### Istio Ambient
+
+| Resource | Documentation |
+|----------|---------------|
+| Ambient Overview | [istio.io/docs/ambient](https://istio.io/latest/docs/ambient/) |
+| Helm Installation | [Install with Helm](https://istio.io/latest/docs/ambient/install/helm/) |
+| Multi-Cluster Setup | [Multi-Primary Different Networks](https://istio.io/latest/docs/setup/install/multicluster/multi-primary_multi-network/) |
+| Plug-in CA Certificates | [Certificate Management](https://istio.io/latest/docs/tasks/security/cert-management/plugin-ca-cert/) |
+| DNS Proxying | [DNS Proxy Configuration](https://istio.io/latest/docs/ops/configuration/traffic-management/dns-proxy/) |
+| Trust Domain | [Glossary: Trust Domain](https://istio.io/latest/docs/reference/glossary/#trust-domain) |
+
+### Istio Helm Charts (Artifact Hub)
+
+| Chart | Helm Values Reference |
+|-------|----------------------|
+| istio-base | [base chart](https://artifacthub.io/packages/helm/istio-official/base) |
+| istiod | [istiod chart](https://artifacthub.io/packages/helm/istio-official/istiod) |
+| istio-cni | [cni chart](https://artifacthub.io/packages/helm/istio-official/cni) |
+| ztunnel | [ztunnel chart](https://artifacthub.io/packages/helm/istio-official/ztunnel) |
+
+### Solo.io Gloo Gateway
+
+| Resource | Documentation |
+|----------|---------------|
+| Gloo Gateway Overview | [docs.solo.io/gateway](https://docs.solo.io/gateway/latest/) |
+| Gloo Gateway v2 Helm | [Helm Reference](https://docs.solo.io/gateway/2.0.x/reference/helm/gloo-gateway/) |
+| Gloo Gateway CRDs Helm | [CRDs Helm Reference](https://docs.solo.io/gateway/2.0.x/reference/helm/gloo-gateway-crds/) |
+
+### Solo.io Gloo Platform
+
+| Resource | Documentation |
+|----------|---------------|
+| Gloo Platform Overview | [docs.solo.io/gloo-mesh-enterprise](https://docs.solo.io/gloo-mesh-enterprise/main/) |
+| Installation Guide | [Enterprise Installation](https://docs.solo.io/gloo-mesh-enterprise/main/setup/installation/enterprise_installation/) |
+| Helm Values Reference | [Helm Overview](https://docs.solo.io/gloo-mesh/main/reference/helm/overview/) |
+| meshctl CLI Reference | [meshctl](https://docs.solo.io/gloo-mesh-enterprise/main/reference/cli/meshctl/) |
+| meshctl cluster register | [cluster register](https://docs.solo.io/gloo-mesh-enterprise/main/reference/cli/meshctl_cluster_register/) |
+
+### Solo.io Istio Distribution
+
+| Resource | Documentation |
+|----------|---------------|
+| Solo Istio Overview | [Istio Documentation](https://docs.solo.io/gloo-mesh-enterprise/main/istio/) |
+| Manual Istio Deploy | [Manual Deployment](https://docs.solo.io/gloo-mesh-enterprise/main/istio/manual/manual_deploy/) |
+| L7 Telemetry | [Observability](https://docs.solo.io/gloo-mesh-enterprise/main/observability/)

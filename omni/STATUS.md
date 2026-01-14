@@ -1,6 +1,6 @@
 # Omni Workshop Status
 
-> **Last Updated**: 2026-01-12 (successful test run, failover fix, Istio config sync)
+> **Last Updated**: 2026-01-14 (removed unnecessary Istio settings, all 32 tests passed)
 
 This file tracks the operational status of the Omni workshop, including test results, known issues, and version information. Claude Code should update this file after test runs and when issues are discovered or resolved.
 
@@ -14,7 +14,7 @@ This file tracks the operational status of the Omni workshop, including test res
 | Gloo Gateway | 2.0.1 | |
 | Istio (Solo) | 1.28.1 | Uses `-solo` suffix |
 | Gloo Platform | 2.11.0 | |
-| Kubernetes | GKE 1.33.5-gke.1308000 | Tested on GKE |
+| Kubernetes | GKE 1.33.5-gke.2019000 | Tested on GKE |
 
 ---
 
@@ -24,13 +24,13 @@ This file tracks the operational status of the Omni workshop, including test res
 
 | Field | Value |
 |-------|-------|
-| **Date** | 2026-01-12 |
-| **Tester** | Lutz (manual) |
+| **Date** | 2026-01-14 |
+| **Tester** | Claude Code |
 | **Clusters** | lutzl-cluster1 (europe-west3-a), lutzl-cluster2 (europe-west2-a) |
 | **Tests Passed** | 32 |
 | **Tests Failed** | 0 |
-| **Duration** | Full workshop test |
-| **Notes** | All 32 tests passed including fixed failover test. Global service hostname corrected to mesh.internal. |
+| **Duration** | Full workshop test with fresh GKE clusters |
+| **Notes** | All 32 tests passed after removing unnecessary Istio settings (`ISTIO_META_DNS_CAPTURE`, `PILOT_ENABLE_IP_AUTOALLOCATE`, `ambient.dnsCapture`). Confirms these settings are now defaults in Istio 1.28.1 ambient mode. |
 
 ### Test Run History
 
@@ -38,6 +38,7 @@ This file tracks the operational status of the Omni workshop, including test res
 
 | Date | Result | Passed/Failed | Notes |
 |------|--------|---------------|-------|
+| 2026-01-14 | PASS | 32/0 | **Fresh GKE clusters + removed unnecessary Istio settings.** Removed `ISTIO_META_DNS_CAPTURE` (sidecar-only), `PILOT_ENABLE_IP_AUTOALLOCATE` (default since 1.25), `ambient.dnsCapture` (default since 1.25). All functionality preserved. |
 | 2026-01-12 | PASS | 32/0 | **All tests passed.** Fixed global failover test - hostname changed from svc.cluster.local to mesh.internal. Synced omni.md Istio configs with setup.sh. |
 | 2026-01-08 09:25 | PASS | 31/1 | Fresh GKE clusters. Failover test timing issue (HTTP 503). All other tests passed including full tracing. |
 | 2026-01-06 11:52 | PASS | 32/0 | **Fresh GKE clusters from scratch**. Full setup + workshop + tracing. All services traced. |
@@ -87,6 +88,9 @@ This file tracks the operational status of the Omni workshop, including test res
 
 | Date | Change | Components Affected |
 |------|--------|---------------------|
+| 2026-01-14 | **Removed unnecessary Istio settings**: Removed `ISTIO_META_DNS_CAPTURE` (sidecar-only, not used in ambient), `PILOT_ENABLE_IP_AUTOALLOCATE` (default since Istio 1.25), `ambient.dnsCapture: true` (default since Istio 1.25). These were setting options that are either not applicable to ambient mode or already defaults. See [Istio DNS Proxying docs](https://istio.io/latest/docs/ops/configuration/traffic-management/dns-proxy/) and [Istio 1.25 change notes](https://istio.io/latest/news/releases/1.25.x/announcing-1.25/change-notes/). | setup.sh, setup.md |
+| 2026-01-14 | **Added comprehensive documentation links to setup.md**: Added clickable links to upstream documentation for all parameters in Gateway API, Istio, Gloo Gateway, and Gloo Platform sections. Added Reference Documentation section at end. | setup.md |
+| 2026-01-14 | **Updated omni.md step numbering**: Steps 1-14 now have consistent numbering that matches test-workshop.sh. Added `--list` option improvements to test-workshop.sh. | omni.md, test-workshop.sh |
 | 2026-01-12 | **Fixed global failover test**: Changed Backend hostname from `productpage.bookinfo.svc.cluster.local` to `productpage.bookinfo.mesh.internal`. K8s DNS (svc.cluster.local) only resolves to local ClusterIP; mesh.internal uses Istio DNS proxy to resolve to Mesh VIP (240.240.0.x) enabling cross-cluster routing via east-west gateway. | test-workshop.sh, omni.md |
 | 2026-01-12 | Synced Istio Helm configs in omni.md with setup.sh: All istiod, istio-cni, and ztunnel settings now match exactly | omni.md |
 | 2026-01-09 | ~~Fixed Backend hostname: Changed from mesh.internal to svc.cluster.local~~ **INCORRECT - reverted 2026-01-12** | test-workshop.sh |

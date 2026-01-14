@@ -459,9 +459,6 @@ meshConfig:
   accessLogFile: /dev/stdout
   rootNamespace: istio-system
   trustDomain: cluster.local
-  defaultConfig:
-    proxyMetadata:
-      ISTIO_META_DNS_CAPTURE: "true"
   serviceScopeConfigs:
   - scope: GLOBAL
     servicesSelector:
@@ -473,7 +470,6 @@ meshConfig:
 pilot:
   env:
     PILOT_ENABLE_AMBIENT: "true"
-    PILOT_ENABLE_IP_AUTOALLOCATE: "true"
     PILOT_SKIP_VALIDATE_TRUST_DOMAIN: "true"
     AUTO_RELOAD_PLUGIN_CERTS: "true"
   cni:
@@ -495,8 +491,6 @@ EOF
             --version "${ISTIO_IMAGE}" \
             --wait \
             -f - <<EOF
-ambient:
-  dnsCapture: true
 excludeNamespaces:
 - istio-system
 - kube-system
