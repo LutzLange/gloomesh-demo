@@ -1,6 +1,6 @@
 # Omni Workshop Status
 
-> **Last Updated**: 2026-01-14 (removed unnecessary Istio settings, all 32 tests passed)
+> **Last Updated**: 2026-01-16 (restored workshop.sh with Helm-based Istio installation)
 
 This file tracks the operational status of the Omni workshop, including test results, known issues, and version information. Claude Code should update this file after test runs and when issues are discovered or resolved.
 
@@ -29,8 +29,8 @@ This file tracks the operational status of the Omni workshop, including test res
 | **Clusters** | lutzl-cluster1 (europe-west3-a), lutzl-cluster2 (europe-west2-a) |
 | **Tests Passed** | 32 |
 | **Tests Failed** | 0 |
-| **Duration** | Full workshop test with fresh GKE clusters |
-| **Notes** | All 32 tests passed after removing unnecessary Istio settings (`ISTIO_META_DNS_CAPTURE`, `PILOT_ENABLE_IP_AUTOALLOCATE`, `ambient.dnsCapture`). Confirms these settings are now defaults in Istio 1.28.1 ambient mode. |
+| **Duration** | Full workshop test |
+| **Notes** | All 32 tests passed with simplified istiod config. Removed 7 redundant/deprecated settings (`AUTO_RELOAD_PLUGIN_CERTS`, `PILOT_SKIP_VALIDATE_TRUST_DOMAIN`, `PILOT_ENABLE_AMBIENT`, `serviceScopeConfigs`, `proxy.clusterDomain`, `rootNamespace`, `trustDomain`). Confirms ambient profile provides correct defaults. |
 
 ### Test Run History
 
@@ -38,6 +38,7 @@ This file tracks the operational status of the Omni workshop, including test res
 
 | Date | Result | Passed/Failed | Notes |
 |------|--------|---------------|-------|
+| 2026-01-14 14:25 | PASS | 32/0 | **Simplified istiod config validated.** Removed 7 redundant/deprecated settings. All functionality preserved with cleaner configuration. |
 | 2026-01-14 | PASS | 32/0 | **Fresh GKE clusters + removed unnecessary Istio settings.** Removed `ISTIO_META_DNS_CAPTURE` (sidecar-only), `PILOT_ENABLE_IP_AUTOALLOCATE` (default since 1.25), `ambient.dnsCapture` (default since 1.25). All functionality preserved. |
 | 2026-01-12 | PASS | 32/0 | **All tests passed.** Fixed global failover test - hostname changed from svc.cluster.local to mesh.internal. Synced omni.md Istio configs with setup.sh. |
 | 2026-01-08 09:25 | PASS | 31/1 | Fresh GKE clusters. Failover test timing issue (HTTP 503). All other tests passed including full tracing. |
@@ -88,6 +89,8 @@ This file tracks the operational status of the Omni workshop, including test res
 
 | Date | Change | Components Affected |
 |------|--------|---------------------|
+| 2026-01-16 | **Restored workshop.sh**: Recovered from git after accidental deletion. Updated setup-5 to use Helm-based Istio installation (matching setup.sh) instead of removed Gloo Operator. Removed all Gloo Operator references. | workshop.sh |
+| 2026-01-14 | **Simplified istiod configuration**: Removed 7 redundant/deprecated settings: `AUTO_RELOAD_PLUGIN_CERTS` (removed in [Istio 1.19](https://istio.io/latest/news/releases/1.19.x/announcing-1.19/change-notes/)), `PILOT_SKIP_VALIDATE_TRUST_DOMAIN` (not needed - same trust domain on all clusters), `PILOT_ENABLE_AMBIENT` (set by `profile: ambient`), `serviceScopeConfigs` (in [ambient profile](https://github.com/istio/istio/blob/master/manifests/helm-profiles/ambient.yaml)), `proxy.clusterDomain` (default), `rootNamespace` (default), `trustDomain` (default). | setup.sh, setup.md |
 | 2026-01-14 | **Removed unnecessary Istio settings**: Removed `ISTIO_META_DNS_CAPTURE` (sidecar-only, not used in ambient), `PILOT_ENABLE_IP_AUTOALLOCATE` (default since Istio 1.25), `ambient.dnsCapture: true` (default since Istio 1.25). These were setting options that are either not applicable to ambient mode or already defaults. See [Istio DNS Proxying docs](https://istio.io/latest/docs/ops/configuration/traffic-management/dns-proxy/) and [Istio 1.25 change notes](https://istio.io/latest/news/releases/1.25.x/announcing-1.25/change-notes/). | setup.sh, setup.md |
 | 2026-01-14 | **Added comprehensive documentation links to setup.md**: Added clickable links to upstream documentation for all parameters in Gateway API, Istio, Gloo Gateway, and Gloo Platform sections. Added Reference Documentation section at end. | setup.md |
 | 2026-01-14 | **Updated omni.md step numbering**: Steps 1-14 now have consistent numbering that matches test-workshop.sh. Added `--list` option improvements to test-workshop.sh. | omni.md, test-workshop.sh |

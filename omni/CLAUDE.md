@@ -110,7 +110,7 @@ export GLOO_VERSION=2.11.0
 
 The workshop is organized into setup and demo checkpoints:
 
-### Setup Steps (setup.sh / workshop.sh)
+### Setup Steps ( setup.sh )
 
 | Checkpoint | Description |
 |------------|-------------|
@@ -122,7 +122,7 @@ The workshop is organized into setup and demo checkpoints:
 | setup-6 | Install Gloo Management Plane |
 | setup-7 | Register Cluster2 |
 
-### Demo Steps (workshop.sh / test-workshop.sh)
+### Demo Steps ( test-workshop.sh )
 
 | Checkpoint | Description |
 |------------|-------------|
