@@ -1,0 +1,8 @@
+demo-1-deploy-bookinfo
+demo-2-expose-ingress
+demo-3-add-to-mesh
+demo-4-verify-mtls
+demo-5-deploy-waypoint
+demo-6-canary-routing
+demo-7-traffic-shifting
+demo-8-configure-tracing
