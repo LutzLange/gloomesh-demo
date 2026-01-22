@@ -1,0 +1,13 @@
+# Environment configuration (contains secrets/license keys)
+env.sh
+
+# Workshop progress tracking
+.workshop-progress
+
+# Editor files
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
