@@ -1,0 +1,12 @@
+aws:
+  profile: cluster-manager
+  sso_profile: internal
+  # regions omitted - will auto-discover all enabled regions
+
+gcp:
+  project: field-engineering-eu
+  credentials_file: ~/.config/cluster-manager/gcp-sa.json
+
+saved_state:
+  eks: {}
+  gke: {}

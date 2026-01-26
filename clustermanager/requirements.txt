@@ -1,0 +1,8 @@
+flask
+boto3
+google-cloud-container
+pyyaml
+pywebview
+PyQt6
+PyQt6-WebEngine
+qtpy

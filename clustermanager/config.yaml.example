@@ -1,0 +1,17 @@
+aws:
+  profile: your-aws-profile  # For API operations (IAM user with eksctl permissions)
+  sso_profile: internal      # For k8s access during delete (SSO profile)
+  regions:
+    - eu-central-1
+
+gcp:
+  project: your-project-id
+  credentials_file: ~/.config/cluster-manager/gcp-sa.json  # optional, for service account
+  locations:
+    - europe-west2      # regional
+    - europe-west3-a    # zonal
+
+# Auto-populated by app when scaling down
+saved_state:
+  eks: {}
+  gke: {}

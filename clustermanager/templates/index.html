@@ -1,0 +1,1209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cluster Manager</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; padding: 20px; }
+        h1 { margin-bottom: 20px; color: #333; }
+        .toolbar { margin-bottom: 20px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+        .toolbar button { padding: 8px 16px; cursor: pointer; border: 1px solid #ccc; border-radius: 4px; background: #fff; }
+        .toolbar button:hover { background: #f0f0f0; }
+        .filter-group { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+        .filter-group label { font-size: 0.9em; color: #666; }
+        .filter-group select, .filter-group input { padding: 8px 12px; border: 1px solid #ccc; border-radius: 4px; font-size: 0.9em; }
+        .filter-group select { min-width: 150px; }
+
+        .operations-panel { background: #fff; border-radius: 8px; padding: 16px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); display: none; }
+        .operations-panel.visible { display: block; }
+        .operations-panel h3 { font-size: 0.95em; color: #333; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+        .operations-list { display: flex; flex-direction: column; gap: 8px; }
+        .operation-item { display: flex; align-items: center; gap: 12px; padding: 10px; background: #f8f9fa; border-radius: 6px; font-size: 0.9em; }
+        .operation-item .op-spinner { width: 14px; height: 14px; border: 2px solid #e0e0e0; border-top-color: #1976d2; border-radius: 50%; animation: spin 0.8s linear infinite; }
+        .operation-item .op-cluster { font-weight: 600; color: #333; }
+        .operation-item .op-action { color: #666; }
+        .operation-item .op-time { margin-left: auto; color: #999; font-size: 0.85em; }
+        .operation-item.completed { background: #e8f5e9; }
+        .operation-item.completed .op-spinner { display: none; }
+        .operation-item.failed { background: #ffebee; }
+        .operation-item.failed .op-spinner { display: none; }
+
+        .clusters { display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 20px; }
+        .cluster-card { background: #fff; border-radius: 8px; padding: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); border-left: 4px solid #ccc; position: relative; }
+        .cluster-card.eks { border-left-color: #ff9900; }
+        .cluster-card.gke { border-left-color: #4285f4; }
+        .cluster-card.cloudformation { border-left-color: #6c757d; background: #f8f9fa; }
+        .cluster-card.no-owner { background: #fff8e1; border-left-color: #ff8f00; box-shadow: 0 2px 8px rgba(255,143,0,0.2); }
+        .cluster-card.cf-failed { box-shadow: 0 2px 8px rgba(198,40,40,0.3); }
+        .cf-status { margin-top: 8px; padding: 8px; background: #f5f5f5; border-radius: 4px; font-size: 0.85em; }
+        .cf-status.has-failed { background: #ffebee; }
+        .cf-status.has-in-progress { background: #fff3e0; }
+        .cf-stack-item { display: flex; justify-content: space-between; align-items: center; padding: 2px 0; }
+        .cf-stack-name { font-family: monospace; font-size: 0.8em; color: #666; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px; }
+        .cf-stack-status { font-size: 0.75em; padding: 2px 6px; border-radius: 8px; }
+        .cf-stack-status.DELETE_FAILED { background: #ffcdd2; color: #c62828; }
+        .cf-stack-status.CREATE_COMPLETE, .cf-stack-status.UPDATE_COMPLETE { background: #c8e6c9; color: #2e7d32; }
+        .cf-stack-status.DELETE_IN_PROGRESS, .cf-stack-status.CREATE_IN_PROGRESS, .cf-stack-status.UPDATE_IN_PROGRESS { background: #fff3e0; color: #f57c00; }
+        .cluster-card.has-operation { border: 2px solid #1976d2; }
+        .cluster-card.loading { opacity: 0.6; pointer-events: none; }
+        .cluster-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+        .cluster-name { font-size: 1.2em; font-weight: 600; color: #333; }
+        .provider-badge { padding: 4px 8px; border-radius: 4px; font-size: 0.75em; font-weight: 600; text-transform: uppercase; }
+        .provider-badge.eks { background: #fff3e0; color: #e65100; }
+        .provider-badge.gke { background: #e3f2fd; color: #1565c0; }
+        .provider-badge.cloudformation { background: #e9ecef; color: #495057; }
+        .cluster-info { color: #666; font-size: 0.9em; margin-bottom: 16px; }
+        .cluster-info div { margin-bottom: 4px; }
+        .status { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.8em; }
+        .status.ACTIVE, .status.RUNNING { background: #e8f5e9; color: #2e7d32; }
+        .status.CREATING, .status.PROVISIONING, .status.UPDATING, .status.RECONCILING { background: #fff3e0; color: #f57c00; }
+        .status.DELETING, .status.STOPPING { background: #ffebee; color: #c62828; }
+        .owner { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.8em; background: #e8eaf6; color: #3949ab; }
+        .owner.none { background: #f5f5f5; color: #999; }
+        .cluster-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+        .cluster-actions button { padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85em; transition: background 0.2s; }
+        .cluster-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-scale-down { background: #fff3e0; color: #e65100; }
+        .btn-scale-down:hover:not(:disabled) { background: #ffe0b2; }
+        .btn-scale-up { background: #e8f5e9; color: #2e7d32; }
+        .btn-scale-up:hover:not(:disabled) { background: #c8e6c9; }
+        .btn-delete { background: #ffebee; color: #c62828; }
+        .btn-delete:hover:not(:disabled) { background: #ffcdd2; }
+        .btn-delete.confirming { background: #c62828; color: #fff; animation: pulse 1s infinite; }
+        .btn-set-owner { background: #e8eaf6; color: #3949ab; }
+        .btn-set-owner:hover:not(:disabled) { background: #c5cae9; }
+        .btn-troubleshoot { background: #fce4ec; color: #c2185b; }
+        .btn-troubleshoot:hover:not(:disabled) { background: #f8bbd9; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
+        .loading-spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid #ccc; border-top-color: #333; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 8px; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .message { padding: 12px; margin-bottom: 20px; border-radius: 4px; display: none; }
+        .message.success { background: #e8f5e9; color: #2e7d32; display: block; }
+        .message.error { background: #ffebee; color: #c62828; display: block; }
+        .node-pools { font-size: 0.85em; color: #888; margin-top: 4px; }
+        .cluster-count { font-size: 0.9em; color: #666; margin-bottom: 15px; }
+
+        .operation-badge { position: absolute; top: 10px; right: 10px; background: #1976d2; color: #fff; padding: 4px 10px; border-radius: 12px; font-size: 0.75em; display: flex; align-items: center; gap: 6px; }
+        .operation-badge .mini-spinner { width: 10px; height: 10px; border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spin 0.8s linear infinite; }
+
+        .operation-item { cursor: pointer; }
+        .operation-item:hover { filter: brightness(0.95); }
+        .operation-item .op-logs-btn { background: none; border: none; color: #1976d2; cursor: pointer; font-size: 0.85em; padding: 2px 6px; }
+
+        .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: none; justify-content: center; align-items: center; z-index: 1000; }
+        .modal-overlay.visible { display: flex; }
+        .modal { background: #fff; border-radius: 8px; width: 90%; max-width: 800px; max-height: 80vh; display: flex; flex-direction: column; box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
+        .modal-header { padding: 16px 20px; border-bottom: 1px solid #e0e0e0; display: flex; justify-content: space-between; align-items: center; }
+        .modal-header h3 { font-size: 1.1em; color: #333; margin: 0; }
+        .modal-header .close-btn { background: none; border: none; font-size: 1.5em; cursor: pointer; color: #666; padding: 0; line-height: 1; }
+        .modal-header .close-btn:hover { color: #333; }
+        .modal-header .copy-btn { background: #f5f5f5; border: 1px solid #ccc; border-radius: 4px; padding: 6px 12px; cursor: pointer; font-size: 0.85em; margin-right: 12px; }
+        .modal-header .copy-btn:hover { background: #e0e0e0; }
+        .modal-header .copy-btn.copied { background: #e8f5e9; border-color: #4caf50; color: #2e7d32; }
+        .modal-body { padding: 20px; overflow-y: auto; flex: 1; }
+        .modal-status { display: flex; gap: 20px; margin-bottom: 16px; font-size: 0.9em; }
+        .modal-status .status-item { display: flex; align-items: center; gap: 6px; }
+        .modal-status .status-badge { padding: 4px 10px; border-radius: 12px; font-size: 0.85em; font-weight: 500; }
+        .modal-status .status-badge.running { background: #e3f2fd; color: #1565c0; }
+        .modal-status .status-badge.completed { background: #e8f5e9; color: #2e7d32; }
+        .modal-status .status-badge.failed { background: #ffebee; color: #c62828; }
+        .log-viewer { background: #1e1e1e; color: #d4d4d4; font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; font-size: 0.85em; padding: 16px; border-radius: 6px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; max-height: 400px; overflow-y: auto; user-select: text; cursor: text; }
+        .log-viewer .log-error { color: #f44336; }
+        .log-viewer .log-success { color: #4caf50; }
+        .log-viewer .log-warning { color: #ff9800; }
+    </style>
+</head>
+<body>
+    <h1>Cluster Manager</h1>
+    <div class="toolbar">
+        <button onclick="loadClusters()">Refresh</button>
+        <button onclick="reloadConfig()">Reload Config</button>
+        <button onclick="showHelp()">Help</button>
+        <div class="filter-group">
+            <label for="provider-filter">Provider:</label>
+            <select id="provider-filter" onchange="renderClusters()">
+                <option value="">All</option>
+                <option value="eks">EKS</option>
+                <option value="gke">GKE</option>
+                <option value="cloudformation">Orphaned CF</option>
+            </select>
+        </div>
+        <div class="filter-group">
+            <label for="region-filter">Region:</label>
+            <select id="region-filter" onchange="renderClusters()">
+                <option value="">All</option>
+            </select>
+        </div>
+        <div class="filter-group">
+            <label for="owner-filter">Owner:</label>
+            <select id="owner-filter" onchange="renderClusters()">
+                <option value="">All</option>
+            </select>
+        </div>
+    </div>
+
+    <div id="operations-panel" class="operations-panel">
+        <h3><span class="loading-spinner"></span> Running Operations</h3>
+        <div id="operations-list" class="operations-list"></div>
+    </div>
+
+    <div id="message" class="message"></div>
+    <div id="cluster-count" class="cluster-count"></div>
+    <div id="clusters" class="clusters">
+        <div><span class="loading-spinner"></span>Loading clusters...</div>
+    </div>
+
+    <div id="modal-overlay" class="modal-overlay" onclick="closeModal(event)">
+        <div class="modal" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h3 id="modal-title">Operation Details</h3>
+                <div>
+                    <button class="copy-btn" id="copy-btn" onclick="copyLogs()">Copy Logs</button>
+                    <button class="close-btn" onclick="closeModal()">&times;</button>
+                </div>
+            </div>
+            <div class="modal-body">
+                <div class="modal-status" id="modal-status"></div>
+                <div class="log-viewer" id="log-viewer">Loading...</div>
+            </div>
+        </div>
+    </div>
+
+    <div id="troubleshoot-overlay" class="modal-overlay" onclick="closeTroubleshoot(event)">
+        <div class="modal" style="max-width:900px;" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h3 id="troubleshoot-title">Troubleshoot Stack Deletion</h3>
+                <div>
+                    <button class="copy-btn" style="background:#c2185b;color:#fff;border-color:#c2185b;" id="fix-with-claude-btn" onclick="fixWithClaude()">Fix with Claude Code</button>
+                    <button class="copy-btn" id="copy-prompt-btn" onclick="copyTroubleshootPrompt()">Copy Prompt</button>
+                    <button class="close-btn" onclick="closeTroubleshoot()">&times;</button>
+                </div>
+            </div>
+            <div class="modal-body">
+                <div id="troubleshoot-loading" style="text-align:center;padding:40px;">
+                    <span class="loading-spinner"></span> Gathering diagnostic information...
+                </div>
+                <div id="troubleshoot-content" style="display:none;">
+                    <div style="margin-bottom:16px;">
+                        <h4 style="margin-bottom:8px;">Stack Status</h4>
+                        <div id="troubleshoot-stacks"></div>
+                    </div>
+                    <div style="margin-bottom:16px;">
+                        <h4 style="margin-bottom:8px;">VPC Dependencies</h4>
+                        <div id="troubleshoot-vpc"></div>
+                    </div>
+                    <div>
+                        <h4 style="margin-bottom:8px;">Claude Code Prompt</h4>
+                        <p style="font-size:0.85em;color:#666;margin-bottom:8px;">Copy this prompt and paste it into Claude Code for help resolving the issue:</p>
+                        <pre id="troubleshoot-prompt" style="background:#1e1e1e;color:#d4d4d4;padding:16px;border-radius:6px;overflow-x:auto;white-space:pre-wrap;font-size:0.8em;max-height:300px;overflow-y:auto;user-select:text;cursor:text;"></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="help-overlay" class="modal-overlay" onclick="closeHelp(event)">
+        <div class="modal" style="max-width:700px;" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h3>Cluster Manager Help</h3>
+                <button class="close-btn" onclick="closeHelp()">&times;</button>
+            </div>
+            <div class="modal-body" style="font-size:0.9em;">
+                <h4 style="margin-bottom:12px;">Configuration File</h4>
+                <p style="margin-bottom:8px;">Location: <code style="background:#f5f5f5;padding:2px 6px;border-radius:3px;">config.yaml</code> (same directory as app.py)</p>
+
+                <h4 style="margin:16px 0 12px;">AWS Configuration</h4>
+                <pre style="background:#f5f5f5;padding:12px;border-radius:4px;overflow-x:auto;font-size:0.85em;">aws:
+  profile: cluster-manager    # IAM user profile for API operations
+  sso_profile: internal       # SSO profile for kubectl access during delete
+  regions:
+    - eu-central-1            # AWS regions to scan for clusters
+    - us-west-2</pre>
+
+                <h4 style="margin:16px 0 12px;">GCP Configuration</h4>
+                <pre style="background:#f5f5f5;padding:12px;border-radius:4px;overflow-x:auto;font-size:0.85em;">gcp:
+  project: your-project-id
+  credentials_file: ~/.config/cluster-manager/gcp-sa.json  # Service account key
+  locations:
+    - europe-west2            # Regional clusters
+    - europe-west3-a          # Zonal clusters</pre>
+
+                <h4 style="margin:16px 0 12px;">Features</h4>
+                <ul style="margin-left:20px;line-height:1.8;">
+                    <li><strong>Scale Down/Up:</strong> Saves node counts before scaling to 0, restores on scale up</li>
+                    <li><strong>Delete:</strong> Full cleanup including ECS clusters, load balancers, security groups</li>
+                    <li><strong>Owner Filter:</strong> Filter by cluster owner tag/label (default: your username)</li>
+                    <li><strong>CloudFormation:</strong> Shows orphaned stacks, allows cleanup</li>
+                    <li><strong>Parallel Operations:</strong> Multiple deletions can run simultaneously</li>
+                </ul>
+
+                <h4 style="margin:16px 0 12px;">Required Permissions</h4>
+                <p style="margin-bottom:8px;"><strong>AWS IAM User:</strong></p>
+                <ul style="margin-left:20px;line-height:1.6;font-size:0.85em;">
+                    <li>EKS: Full access (eks:*)</li>
+                    <li>EC2: Describe/Delete for VPCs, Security Groups, ENIs, Load Balancers</li>
+                    <li>CloudFormation: Full access</li>
+                    <li>ECS: List, Describe, Update, Delete for clusters/services/tasks</li>
+                    <li>ELB/ELBv2: Describe and Delete load balancers</li>
+                </ul>
+                <p style="margin-top:12px;"><strong>GCP Service Account:</strong></p>
+                <ul style="margin-left:20px;line-height:1.6;font-size:0.85em;">
+                    <li>Kubernetes Engine Admin role</li>
+                </ul>
+
+                <h4 style="margin:16px 0 12px;">Command Line Options</h4>
+                <pre style="background:#f5f5f5;padding:12px;border-radius:4px;overflow-x:auto;font-size:0.85em;">python3 app.py [options]
+  --debug     Enable debug logging
+  --port N    Run on port N (default: 5000)
+  --browser   Open in browser instead of native window</pre>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let clusters = [];
+        let allClusters = [];
+        let deleteConfirmState = {};
+        let operations = {};
+        let refreshInterval = null;
+        let currentModalOp = null;
+        let modalRefreshInterval = null;
+        let ownerFilterInitialized = false;  // Track if user has made initial selection
+        const defaultOwner = '{{ default_owner }}';
+
+        function generateOpId() {
+            return 'op-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+        }
+
+        function addOperation(clusterName, action, provider, location, serverId = null) {
+            const opId = serverId || generateOpId();
+            operations[opId] = {
+                id: opId,
+                clusterName,
+                action,
+                provider,
+                location,
+                startTime: Date.now(),
+                status: 'running',
+                serverId: serverId,
+                logs: ''
+            };
+            updateOperationsPanel();
+            startAutoRefresh();
+
+            // If server-side operation, start polling for logs
+            if (serverId) {
+                pollServerOperation(opId);
+            }
+
+            return opId;
+        }
+
+        async function pollServerOperation(opId) {
+            const op = operations[opId];
+            if (!op || !op.serverId) return;
+
+            try {
+                const res = await fetch(`/api/operations/${op.serverId}`);
+                const data = await res.json();
+                if (data.success) {
+                    op.logs = data.data.logs;
+                    op.status = data.data.status;
+                    if (data.data.end_time) {
+                        op.endTime = new Date(data.data.end_time).getTime();
+                    }
+
+                    // Update modal if viewing this operation
+                    if (currentModalOp === opId) {
+                        updateModalContent(op);
+                    }
+
+                    updateOperationsPanel();
+
+                    if (data.data.status === 'running') {
+                        setTimeout(() => pollServerOperation(opId), 2000);
+                    } else {
+                        // Operation completed
+                        loadClusters(true);
+                        // Keep in list for 30 seconds so user can view logs
+                        setTimeout(() => {
+                            delete operations[opId];
+                            updateOperationsPanel();
+                            checkStopAutoRefresh();
+                        }, 30000);
+                    }
+                }
+            } catch (e) {
+                console.error('Failed to poll operation:', e);
+                setTimeout(() => pollServerOperation(opId), 5000);
+            }
+        }
+
+        function completeOperation(opId, success = true) {
+            if (operations[opId]) {
+                operations[opId].status = success ? 'completed' : 'failed';
+                operations[opId].endTime = Date.now();
+                appendLog(opId, success ? '\n✓ Operation completed successfully\n' : '\n✗ Operation failed\n');
+                updateOperationsPanel();
+                // Update modal if viewing this operation
+                if (currentModalOp === opId) {
+                    updateModalContent(operations[opId]);
+                }
+                setTimeout(() => {
+                    delete operations[opId];
+                    updateOperationsPanel();
+                    checkStopAutoRefresh();
+                }, 10000);
+            }
+        }
+
+        function appendLog(opId, message) {
+            if (operations[opId]) {
+                operations[opId].logs += message;
+                // Update modal if viewing this operation
+                if (currentModalOp === opId) {
+                    updateModalContent(operations[opId]);
+                }
+            }
+        }
+
+        function checkStopAutoRefresh() {
+            if (Object.keys(operations).filter(k => operations[k].status === 'running').length === 0) {
+                stopAutoRefresh();
+            }
+        }
+
+        function formatDuration(ms) {
+            const seconds = Math.floor(ms / 1000);
+            if (seconds < 60) return `${seconds}s`;
+            const minutes = Math.floor(seconds / 60);
+            const remainingSeconds = seconds % 60;
+            return `${minutes}m ${remainingSeconds}s`;
+        }
+
+        function formatAge(createdAt) {
+            if (!createdAt) return null;
+            const created = new Date(createdAt);
+            const now = new Date();
+            const diffMs = now - created;
+            const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+            const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+
+            if (diffDays > 0) {
+                return `${diffDays} day${diffDays !== 1 ? 's' : ''}`;
+            } else if (diffHours > 0) {
+                return `${diffHours} hour${diffHours !== 1 ? 's' : ''}`;
+            } else {
+                const diffMins = Math.floor(diffMs / (1000 * 60));
+                return `${diffMins} minute${diffMins !== 1 ? 's' : ''}`;
+            }
+        }
+
+        function formatCreatedDate(createdAt) {
+            if (!createdAt) return 'unknown';
+            const created = new Date(createdAt);
+            return created.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+        }
+
+        function updateOperationsPanel() {
+            const panel = document.getElementById('operations-panel');
+            const list = document.getElementById('operations-list');
+            const runningOps = Object.values(operations);
+
+            if (runningOps.length === 0) {
+                panel.classList.remove('visible');
+                return;
+            }
+
+            panel.classList.add('visible');
+            list.innerHTML = runningOps.map(op => {
+                const duration = formatDuration((op.endTime || Date.now()) - op.startTime);
+                const statusClass = op.status === 'running' ? '' : op.status;
+                const hasLogs = op.serverId || op.logs;
+                const logsBtn = hasLogs ? `<button class="op-logs-btn" onclick="openModal('${op.id}')">View Logs</button>` : '';
+                return `
+                    <div class="operation-item ${statusClass}" onclick="openModal('${op.id}')">
+                        <div class="op-spinner"></div>
+                        <span class="op-cluster">${op.clusterName}</span>
+                        <span class="op-action">${op.action}</span>
+                        <span class="op-time">${duration}</span>
+                        ${logsBtn}
+                    </div>
+                `;
+            }).join('');
+
+            renderClusters();
+        }
+
+        function openModal(opId) {
+            const op = operations[opId];
+            if (!op) return;
+
+            currentModalOp = opId;
+            document.getElementById('modal-title').textContent = `${op.action}: ${op.clusterName}`;
+            updateModalContent(op);
+            document.getElementById('modal-overlay').classList.add('visible');
+        }
+
+        function updateModalContent(op) {
+            const statusEl = document.getElementById('modal-status');
+            const logEl = document.getElementById('log-viewer');
+
+            const duration = formatDuration((op.endTime || Date.now()) - op.startTime);
+            const statusBadge = op.status === 'running'
+                ? '<span class="status-badge running"><span class="loading-spinner" style="width:12px;height:12px;margin-right:4px;"></span>Running</span>'
+                : op.status === 'completed'
+                    ? '<span class="status-badge completed">Completed</span>'
+                    : '<span class="status-badge failed">Failed</span>';
+
+            statusEl.innerHTML = `
+                <div class="status-item"><strong>Status:</strong> ${statusBadge}</div>
+                <div class="status-item"><strong>Duration:</strong> ${duration}</div>
+                <div class="status-item"><strong>Provider:</strong> ${op.provider.toUpperCase()}</div>
+            `;
+
+            // Format logs with colors
+            let logs = op.logs || 'Waiting for output...';
+            logs = logs
+                .replace(/error|failed|Error|Failed|ERROR|FAILED/g, '<span class="log-error">$&</span>')
+                .replace(/success|completed|Success|Completed|SUCCESS|COMPLETED|✓/g, '<span class="log-success">$&</span>')
+                .replace(/warning|Warning|WARNING/g, '<span class="log-warning">$&</span>');
+
+            logEl.innerHTML = logs;
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        function closeModal(event) {
+            if (event && event.target !== event.currentTarget) return;
+            document.getElementById('modal-overlay').classList.remove('visible');
+            currentModalOp = null;
+        }
+
+        function showHelp() {
+            document.getElementById('help-overlay').classList.add('visible');
+        }
+
+        function closeHelp(event) {
+            if (event && event.target !== event.currentTarget) return;
+            document.getElementById('help-overlay').classList.remove('visible');
+        }
+
+        let currentTroubleshootData = null;
+
+        async function troubleshoot(index) {
+            const c = clusters[index];
+            const location = c.region || c.location;
+
+            document.getElementById('troubleshoot-title').textContent = `Troubleshoot: ${c.name}`;
+            document.getElementById('troubleshoot-loading').style.display = 'block';
+            document.getElementById('troubleshoot-content').style.display = 'none';
+            document.getElementById('troubleshoot-overlay').classList.add('visible');
+
+            // Reset the Fix with Claude Code button
+            const fixBtn = document.getElementById('fix-with-claude-btn');
+            fixBtn.disabled = false;
+            fixBtn.textContent = 'Fix with Claude Code';
+
+            try {
+                const res = await fetch(`/api/cloudformation/${location}/${c.name}/troubleshoot`);
+                const data = await res.json();
+
+                if (data.success) {
+                    currentTroubleshootData = data.data;
+                    renderTroubleshootContent(data.data);
+                } else {
+                    document.getElementById('troubleshoot-stacks').innerHTML = `<p style="color:#c62828;">Error: ${data.error}</p>`;
+                }
+            } catch (e) {
+                document.getElementById('troubleshoot-stacks').innerHTML = `<p style="color:#c62828;">Failed to gather diagnostics: ${e.message}</p>`;
+            }
+
+            document.getElementById('troubleshoot-loading').style.display = 'none';
+            document.getElementById('troubleshoot-content').style.display = 'block';
+        }
+
+        function renderTroubleshootContent(data) {
+            // Render stacks
+            let stacksHtml = '';
+            if (data.stacks && data.stacks.length > 0) {
+                for (const stack of data.stacks) {
+                    const statusClass = stack.status.includes('FAILED') ? 'color:#c62828;' : (stack.status.includes('COMPLETE') ? 'color:#2e7d32;' : 'color:#f57c00;');
+                    stacksHtml += `<div style="background:#f5f5f5;padding:12px;border-radius:4px;margin-bottom:8px;">
+                        <div><strong>${stack.name}</strong></div>
+                        <div style="${statusClass}">Status: ${stack.status}</div>`;
+                    if (stack.reason) {
+                        stacksHtml += `<div style="font-size:0.85em;color:#666;">Reason: ${stack.reason}</div>`;
+                    }
+                    if (stack.failed_resources && stack.failed_resources.length > 0) {
+                        stacksHtml += `<div style="margin-top:8px;font-size:0.85em;"><strong>Failed Resources:</strong></div>`;
+                        for (const r of stack.failed_resources) {
+                            stacksHtml += `<div style="font-size:0.8em;color:#c62828;margin-left:12px;">• ${r.logical_id} (${r.type}): ${r.reason}</div>`;
+                        }
+                    }
+                    stacksHtml += `</div>`;
+                }
+            } else {
+                stacksHtml = '<p style="color:#666;">No CloudFormation stacks found</p>';
+            }
+            document.getElementById('troubleshoot-stacks').innerHTML = stacksHtml;
+
+            // Render VPC info
+            let vpcHtml = '';
+            if (data.vpc_info) {
+                const vi = data.vpc_info;
+                vpcHtml = `<div style="background:#f5f5f5;padding:12px;border-radius:4px;">
+                    <div><strong>VPC:</strong> ${vi.vpc_id} (exists: ${vi.exists ? 'Yes' : 'No'})</div>`;
+
+                if (vi.exists) {
+                    if (vi.security_groups && vi.security_groups.length > 0) {
+                        vpcHtml += `<div style="margin-top:8px;"><strong>Security Groups (${vi.security_groups.length}):</strong>
+                            ${vi.security_groups.map(sg => `<span style="background:#e3f2fd;padding:2px 6px;border-radius:3px;margin:2px;display:inline-block;font-size:0.8em;">${sg.name}</span>`).join('')}
+                        </div>`;
+                    }
+                    if (vi.network_interfaces && vi.network_interfaces.length > 0) {
+                        vpcHtml += `<div style="margin-top:8px;"><strong>Network Interfaces (${vi.network_interfaces.length}):</strong></div>`;
+                        for (const eni of vi.network_interfaces.slice(0, 5)) {
+                            vpcHtml += `<div style="font-size:0.8em;margin-left:12px;">• ${eni.id}: ${eni.status} - ${eni.description.substring(0, 60)}</div>`;
+                        }
+                        if (vi.network_interfaces.length > 5) {
+                            vpcHtml += `<div style="font-size:0.8em;margin-left:12px;color:#666;">... and ${vi.network_interfaces.length - 5} more</div>`;
+                        }
+                    }
+                    if (vi.peering_connections && vi.peering_connections.length > 0) {
+                        vpcHtml += `<div style="margin-top:8px;"><strong>VPC Peering:</strong> ${vi.peering_connections.map(p => p.id).join(', ')}</div>`;
+                    }
+                    if (vi.nat_gateways && vi.nat_gateways.length > 0) {
+                        vpcHtml += `<div style="margin-top:8px;"><strong>NAT Gateways:</strong> ${vi.nat_gateways.map(n => `${n.id} (${n.state})`).join(', ')}</div>`;
+                    }
+                    if (vi.internet_gateways && vi.internet_gateways.length > 0) {
+                        vpcHtml += `<div style="margin-top:8px;"><strong>Internet Gateways:</strong> ${vi.internet_gateways.map(i => i.id).join(', ')}</div>`;
+                    }
+                    if (vi.classic_load_balancers && vi.classic_load_balancers.length > 0) {
+                        vpcHtml += `<div style="margin-top:8px;"><strong>Classic LBs:</strong> ${vi.classic_load_balancers.map(lb => lb.name).join(', ')}</div>`;
+                    }
+                    if (vi.load_balancers_v2 && vi.load_balancers_v2.length > 0) {
+                        vpcHtml += `<div style="margin-top:8px;"><strong>ALB/NLBs:</strong> ${vi.load_balancers_v2.map(lb => `${lb.name} (${lb.type})`).join(', ')}</div>`;
+                    }
+                    if (vi.ecs_clusters && vi.ecs_clusters.length > 0) {
+                        vpcHtml += `<div style="margin-top:8px;"><strong>Related ECS Clusters:</strong> ${vi.ecs_clusters.join(', ')}</div>`;
+                    }
+                }
+                vpcHtml += `</div>`;
+            } else {
+                vpcHtml = '<p style="color:#666;">No VPC information available</p>';
+            }
+            document.getElementById('troubleshoot-vpc').innerHTML = vpcHtml;
+
+            // Render prompt
+            document.getElementById('troubleshoot-prompt').textContent = data.prompt || 'No prompt generated';
+        }
+
+        function closeTroubleshoot(event) {
+            if (event && event.target !== event.currentTarget) return;
+            document.getElementById('troubleshoot-overlay').classList.remove('visible');
+            currentTroubleshootData = null;
+        }
+
+        async function fixWithClaude() {
+            if (!currentTroubleshootData) return;
+
+            const btn = document.getElementById('fix-with-claude-btn');
+            btn.disabled = true;
+            btn.textContent = 'Starting...';
+
+            try {
+                const res = await fetch(`/api/cloudformation/${currentTroubleshootData.region}/${currentTroubleshootData.cluster_name}/fix-with-claude`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        confirm: true,
+                        prompt: currentTroubleshootData.prompt
+                    })
+                });
+                const data = await res.json();
+
+                if (data.success) {
+                    showMessage(data.data, 'success');
+                    // Close troubleshoot modal
+                    closeTroubleshoot();
+                    // Add operation and start polling
+                    addOperation(
+                        currentTroubleshootData.cluster_name,
+                        'Claude Code Fix',
+                        'cloudformation',
+                        currentTroubleshootData.region,
+                        data.operation_id
+                    );
+                } else {
+                    showMessage('Error: ' + data.error, 'error');
+                    btn.disabled = false;
+                    btn.textContent = 'Fix with Claude Code';
+                }
+            } catch (e) {
+                showMessage('Failed: ' + e.message, 'error');
+                btn.disabled = false;
+                btn.textContent = 'Fix with Claude Code';
+            }
+        }
+
+        function copyTroubleshootPrompt() {
+            if (!currentTroubleshootData || !currentTroubleshootData.prompt) return;
+
+            navigator.clipboard.writeText(currentTroubleshootData.prompt).then(() => {
+                const btn = document.getElementById('copy-prompt-btn');
+                btn.textContent = 'Copied!';
+                btn.classList.add('copied');
+                setTimeout(() => {
+                    btn.textContent = 'Copy for Claude Code';
+                    btn.classList.remove('copied');
+                }, 2000);
+            }).catch(() => {
+                // Fallback
+                const textarea = document.createElement('textarea');
+                textarea.value = currentTroubleshootData.prompt;
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+
+                const btn = document.getElementById('copy-prompt-btn');
+                btn.textContent = 'Copied!';
+                btn.classList.add('copied');
+                setTimeout(() => {
+                    btn.textContent = 'Copy for Claude Code';
+                    btn.classList.remove('copied');
+                }, 2000);
+            });
+        }
+
+        function copyLogs() {
+            const op = operations[currentModalOp];
+            if (!op) return;
+
+            const text = op.logs || 'No logs available';
+            navigator.clipboard.writeText(text).then(() => {
+                const btn = document.getElementById('copy-btn');
+                btn.textContent = 'Copied!';
+                btn.classList.add('copied');
+                setTimeout(() => {
+                    btn.textContent = 'Copy Logs';
+                    btn.classList.remove('copied');
+                }, 2000);
+            }).catch(err => {
+                // Fallback for older browsers
+                const textarea = document.createElement('textarea');
+                textarea.value = text;
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+
+                const btn = document.getElementById('copy-btn');
+                btn.textContent = 'Copied!';
+                btn.classList.add('copied');
+                setTimeout(() => {
+                    btn.textContent = 'Copy Logs';
+                    btn.classList.remove('copied');
+                }, 2000);
+            });
+        }
+
+        function startAutoRefresh() {
+            if (refreshInterval) return;
+            refreshInterval = setInterval(() => {
+                loadClusters(true);
+                updateOperationsPanel();
+            }, 5000);
+        }
+
+        function stopAutoRefresh() {
+            if (refreshInterval) {
+                clearInterval(refreshInterval);
+                refreshInterval = null;
+            }
+        }
+
+        function getClusterOperation(clusterName) {
+            return Object.values(operations).find(op => op.clusterName === clusterName && op.status === 'running');
+        }
+
+        async function loadClusters(silent = false) {
+            const container = document.getElementById('clusters');
+            if (!silent) {
+                container.innerHTML = '<div><span class="loading-spinner"></span>Loading clusters...</div>';
+                document.getElementById('cluster-count').textContent = '';
+            }
+            try {
+                const res = await fetch('/api/clusters');
+                const data = await res.json();
+                if (data.success) {
+                    allClusters = data.data;
+                    updateRegionFilter();
+                    updateOwnerFilter();
+                    renderClusters();
+                } else if (!silent) {
+                    showMessage('Error: ' + data.error, 'error');
+                }
+            } catch (e) {
+                if (!silent) {
+                    showMessage('Failed to load clusters: ' + e.message, 'error');
+                }
+            }
+        }
+
+        function updateRegionFilter() {
+            const select = document.getElementById('region-filter');
+            const currentValue = select.value;
+            const regions = [...new Set(allClusters.map(c => c.region || c.location).filter(r => r))].sort();
+
+            select.innerHTML = '<option value="">All</option>';
+            regions.forEach(region => {
+                const opt = document.createElement('option');
+                opt.value = region;
+                opt.textContent = region;
+                select.appendChild(opt);
+            });
+
+            // Restore previous selection
+            if (currentValue && regions.includes(currentValue)) {
+                select.value = currentValue;
+            }
+        }
+
+        function updateOwnerFilter() {
+            const select = document.getElementById('owner-filter');
+            const currentValue = select.value;
+            const owners = [...new Set(allClusters.map(c => c.owner).filter(o => o))].sort();
+
+            // Always include the default owner (current system user) in the list
+            if (defaultOwner && !owners.includes(defaultOwner)) {
+                owners.push(defaultOwner);
+                owners.sort();
+            }
+
+            select.innerHTML = '<option value="">All</option>';
+            owners.forEach(owner => {
+                const opt = document.createElement('option');
+                opt.value = owner;
+                opt.textContent = owner;
+                select.appendChild(opt);
+            });
+
+            // Restore previous selection, or default to current user only on first load
+            if (ownerFilterInitialized) {
+                // User has already interacted - preserve their selection (including "All")
+                if (currentValue && owners.includes(currentValue)) {
+                    select.value = currentValue;
+                }
+                // If currentValue is "" (All), it stays as "" since that's the first option
+            } else {
+                // First load - set default to current user if available
+                if (owners.includes(defaultOwner)) {
+                    select.value = defaultOwner;
+                }
+                ownerFilterInitialized = true;
+            }
+        }
+
+        function renderClusters() {
+            const container = document.getElementById('clusters');
+            const providerFilter = document.getElementById('provider-filter').value;
+            const regionFilter = document.getElementById('region-filter').value;
+            const ownerFilter = document.getElementById('owner-filter').value.toLowerCase();
+
+            // Apply all filters
+            clusters = allClusters.filter(c => {
+                // Provider filter
+                if (providerFilter && c.provider !== providerFilter) return false;
+
+                // Region filter
+                const clusterRegion = c.region || c.location;
+                if (regionFilter && clusterRegion !== regionFilter) return false;
+
+                // Owner filter - always show clusters without owner, plus those matching
+                if (ownerFilter) {
+                    if (!c.owner) return true;  // Always show clusters without owner
+                    // Substring match (case-insensitive)
+                    if (!c.owner.toLowerCase().includes(ownerFilter) && !ownerFilter.includes(c.owner.toLowerCase())) {
+                        return false;
+                    }
+                }
+
+                return true;
+            });
+
+            const countEl = document.getElementById('cluster-count');
+            countEl.textContent = `Showing ${clusters.length} of ${allClusters.length} clusters`;
+
+            if (clusters.length === 0) {
+                container.innerHTML = '<div>No clusters found</div>';
+                return;
+            }
+            container.innerHTML = clusters.map((c, i) => {
+                const location = c.region || c.location;
+                const pools = c.provider === 'eks' ? c.node_groups : (c.node_pools || []);
+                const poolText = pools.map(p => `${p.name}: ${p.desired || p.node_count}`).join(', ');
+                const ownerClass = c.owner ? '' : 'none';
+                const ownerText = c.owner || 'unknown';
+                const noOwnerClass = (c.owner || c.provider === 'cloudformation') ? '' : 'no-owner';
+                const op = getClusterOperation(c.name);
+                const hasOpClass = op ? 'has-operation' : '';
+                const opBadge = op ? `<div class="operation-badge"><span class="mini-spinner"></span>${op.action}</div>` : '';
+                const disabledAttr = op ? 'disabled' : '';
+                const cfFailedClass = c.cf_has_failed ? 'cf-failed' : '';
+
+                // CloudFormation stacks section
+                let cfSection = '';
+                if (c.cf_stacks && c.cf_stacks.length > 0) {
+                    const cfStatusClass = c.cf_has_failed ? 'has-failed' : (c.cf_has_in_progress ? 'has-in-progress' : '');
+                    const stackItems = c.cf_stacks.map(s => {
+                        const shortName = s.name.replace('eksctl-' + c.name + '-', '');
+                        return `<div class="cf-stack-item">
+                            <span class="cf-stack-name" title="${s.name}">${shortName}</span>
+                            <span class="cf-stack-status ${s.status}">${s.status}</span>
+                        </div>`;
+                    }).join('');
+                    cfSection = `<div class="cf-status ${cfStatusClass}">
+                        <div style="margin-bottom:4px;font-weight:600;font-size:0.8em;">CloudFormation Stacks:</div>
+                        ${stackItems}
+                    </div>`;
+                }
+
+                // Check if this cluster is in delete confirmation state (use cluster name as key)
+                const isConfirming = deleteConfirmState[c.name] === 1;
+                const confirmClass = isConfirming ? 'confirming' : '';
+
+                // Format age info
+                const age = formatAge(c.created_at);
+                const createdDate = formatCreatedDate(c.created_at);
+                const ageText = age ? `${createdDate} (${age})` : 'unknown';
+
+                // Different rendering for orphaned CF stacks vs regular clusters
+                if (c.provider === 'cloudformation') {
+                    const deleteBtnText = isConfirming ? 'Click again to confirm' : 'Delete Stacks';
+                    const cfOwnerClass = c.owner ? '' : 'none';
+                    const cfOwnerText = c.owner || 'unknown';
+                    return `
+                        <div class="cluster-card ${c.provider} ${hasOpClass} ${cfFailedClass}" id="cluster-${i}">
+                            ${opBadge}
+                            <div class="cluster-header">
+                                <span class="cluster-name">${c.name}</span>
+                                <span class="provider-badge ${c.provider}">Orphaned CF</span>
+                            </div>
+                            <div class="cluster-info">
+                                <div><strong>Owner:</strong> <span class="owner ${cfOwnerClass}">${cfOwnerText}</span></div>
+                                <div><strong>Location:</strong> ${location}</div>
+                                <div><strong>Created:</strong> ${ageText}</div>
+                                <div><strong>Status:</strong> <span class="status DELETING">ORPHANED</span></div>
+                                <div style="color:#666;font-size:0.85em;margin-top:8px;">
+                                    EKS cluster deleted but CloudFormation stacks remain
+                                </div>
+                            </div>
+                            ${cfSection}
+                            <div class="cluster-actions" style="margin-top:12px;">
+                                <button class="btn-troubleshoot" onclick="troubleshoot(${i})" ${disabledAttr}>Troubleshoot</button>
+                                <button class="btn-delete ${confirmClass}" id="delete-btn-${i}" onclick="deleteCluster(${i})" ${disabledAttr}>${deleteBtnText}</button>
+                            </div>
+                        </div>
+                    `;
+                }
+
+                const deleteBtnText = isConfirming ? 'Click again to confirm' : 'Delete';
+                const setOwnerBtn = !c.owner ? `<button class="btn-set-owner" onclick="setOwner(${i})" ${disabledAttr}>Set Owner</button>` : '';
+                return `
+                    <div class="cluster-card ${c.provider} ${noOwnerClass} ${hasOpClass} ${cfFailedClass}" id="cluster-${i}">
+                        ${opBadge}
+                        <div class="cluster-header">
+                            <span class="cluster-name">${c.name}</span>
+                            <span class="provider-badge ${c.provider}">${c.provider}</span>
+                        </div>
+                        <div class="cluster-info">
+                            <div><strong>Owner:</strong> <span class="owner ${ownerClass}">${ownerText}</span>${setOwnerBtn ? ' ' + setOwnerBtn : ''}</div>
+                            <div><strong>Location:</strong> ${location}</div>
+                            <div><strong>Created:</strong> ${ageText}</div>
+                            <div><strong>Status:</strong> <span class="status ${c.status}">${c.status}</span></div>
+                            <div><strong>Nodes:</strong> ${c.node_count}</div>
+                            <div class="node-pools">${poolText}</div>
+                        </div>
+                        ${cfSection}
+                        <div class="cluster-actions">
+                            <button class="btn-scale-down" onclick="scaleDown(${i})" ${op || c.node_count === 0 ? 'disabled' : ''}>Scale Down</button>
+                            <button class="btn-scale-up" onclick="scaleUp(${i})" ${disabledAttr}>Scale Up</button>
+                            ${c.cf_has_failed ? `<button class="btn-troubleshoot" onclick="troubleshoot(${i})" ${disabledAttr}>Troubleshoot</button>` : ''}
+                            <button class="btn-delete ${confirmClass}" id="delete-btn-${i}" onclick="deleteCluster(${i})" ${disabledAttr}>${deleteBtnText}</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function showMessage(text, type) {
+            const el = document.getElementById('message');
+            el.textContent = text;
+            el.className = 'message ' + type;
+            setTimeout(() => { el.className = 'message'; }, 5000);
+        }
+
+        async function scaleDown(index) {
+            const c = clusters[index];
+            const location = c.region || c.location;
+            const opId = addOperation(c.name, 'Scaling down', c.provider, location);
+
+            appendLog(opId, `Starting scale down for ${c.name}...\n`);
+            appendLog(opId, `Provider: ${c.provider.toUpperCase()}\n`);
+            appendLog(opId, `Location: ${location}\n`);
+            appendLog(opId, `Current nodes: ${c.node_count}\n\n`);
+
+            try {
+                appendLog(opId, `Sending scale down request...\n`);
+                const res = await fetch(`/api/${c.provider}/${location}/${c.name}/scale-down`, { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    appendLog(opId, `✓ ${data.data}\n\n`);
+                    showMessage(data.data, 'success');
+                } else {
+                    appendLog(opId, `✗ Error: ${data.error}\n`);
+                    showMessage('Error: ' + data.error, 'error');
+                    completeOperation(opId, false);
+                    return;
+                }
+            } catch (e) {
+                appendLog(opId, `✗ Failed: ${e.message}\n`);
+                showMessage('Failed: ' + e.message, 'error');
+                completeOperation(opId, false);
+                return;
+            }
+
+            appendLog(opId, `Waiting for nodes to terminate...\n`);
+            // Keep polling until node count is 0
+            pollUntilComplete(opId, c, () => c.node_count === 0);
+        }
+
+        async function scaleUp(index) {
+            const c = clusters[index];
+            const location = c.region || c.location;
+            const opId = addOperation(c.name, 'Scaling up', c.provider, location);
+
+            appendLog(opId, `Starting scale up for ${c.name}...\n`);
+            appendLog(opId, `Provider: ${c.provider.toUpperCase()}\n`);
+            appendLog(opId, `Location: ${location}\n`);
+            appendLog(opId, `Current nodes: ${c.node_count}\n\n`);
+
+            try {
+                appendLog(opId, `Sending scale up request...\n`);
+                const res = await fetch(`/api/${c.provider}/${location}/${c.name}/scale-up`, { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    appendLog(opId, `✓ ${data.data}\n\n`);
+                    showMessage(data.data, 'success');
+                } else {
+                    appendLog(opId, `✗ Error: ${data.error}\n`);
+                    showMessage('Error: ' + data.error, 'error');
+                    completeOperation(opId, false);
+                    return;
+                }
+            } catch (e) {
+                appendLog(opId, `✗ Failed: ${e.message}\n`);
+                showMessage('Failed: ' + e.message, 'error');
+                completeOperation(opId, false);
+                return;
+            }
+
+            appendLog(opId, `Waiting for nodes to start...\n`);
+            // Keep polling until node count > 0
+            pollUntilComplete(opId, c, () => {
+                const updated = allClusters.find(cl => cl.name === c.name);
+                return updated && updated.node_count > 0;
+            });
+        }
+
+        async function pollUntilComplete(opId, cluster, checkFn) {
+            const maxPolls = 60; // 5 minutes max
+            let polls = 0;
+
+            const poll = async () => {
+                if (!operations[opId] || operations[opId].status !== 'running') return;
+
+                polls++;
+                await loadClusters(true);
+
+                const updated = allClusters.find(c => c.name === cluster.name);
+                if (!updated) {
+                    // Cluster deleted
+                    appendLog(opId, `Cluster no longer exists.\n`);
+                    completeOperation(opId, true);
+                    return;
+                }
+
+                // Log progress
+                appendLog(opId, `[${new Date().toLocaleTimeString()}] Nodes: ${updated.node_count}\n`);
+
+                if (checkFn(updated)) {
+                    completeOperation(opId, true);
+                } else if (polls >= maxPolls) {
+                    appendLog(opId, `\nTimeout reached after ${polls} polls.\n`);
+                    completeOperation(opId, true);
+                } else {
+                    setTimeout(poll, 5000);
+                }
+            };
+
+            setTimeout(poll, 5000);
+        }
+
+        async function deleteCluster(index) {
+            const c = clusters[index];
+            const btn = document.getElementById('delete-btn-' + index);
+            const isOrphanedCF = c.provider === 'cloudformation';
+            const defaultText = isOrphanedCF ? 'Delete Stacks' : 'Delete';
+            const clusterKey = c.name;  // Use cluster name as key for confirm state
+
+            if (!deleteConfirmState[clusterKey]) {
+                deleteConfirmState[clusterKey] = 1;
+                btn.textContent = 'Click again to confirm';
+                btn.classList.add('confirming');
+                setTimeout(() => {
+                    if (deleteConfirmState[clusterKey] === 1) {
+                        delete deleteConfirmState[clusterKey];
+                        // Re-render to reset button state
+                        renderClusters();
+                    }
+                }, 5000);
+                return;
+            }
+
+            if (deleteConfirmState[clusterKey] === 1) {
+                const warningMsg = isOrphanedCF
+                    ? `FINAL WARNING: Delete orphaned CloudFormation stacks for "${c.name}"? This cannot be undone!`
+                    : `FINAL WARNING: Delete cluster "${c.name}"? This cannot be undone!`;
+
+                if (!confirm(warningMsg)) {
+                    delete deleteConfirmState[clusterKey];
+                    renderClusters();
+                    return;
+                }
+
+                const location = c.region || c.location;
+                delete deleteConfirmState[clusterKey];
+
+                let data;
+                try {
+                    const body = { confirm: true };
+                    // For orphaned CF stacks, pass the stack list
+                    if (isOrphanedCF && c.cf_stacks) {
+                        body.stacks = c.cf_stacks;
+                    }
+
+                    const res = await fetch(`/api/${c.provider}/${location}/${c.name}/delete`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body)
+                    });
+                    data = await res.json();
+                    if (!data.success) {
+                        showMessage('Error: ' + data.error, 'error');
+                        return;
+                    }
+                } catch (e) {
+                    showMessage('Failed: ' + e.message, 'error');
+                    return;
+                }
+
+                showMessage(data.data, 'success');
+
+                // Check if server returned an operation_id (eksctl long-running delete)
+                if (data.operation_id) {
+                    // Server-side operation with logs
+                    addOperation(c.name, 'Deleting', c.provider, location, data.operation_id);
+                } else {
+                    // Simple delete - poll for completion
+                    const opId = addOperation(c.name, 'Deleting', c.provider, location);
+                    pollUntilComplete(opId, c, () => {
+                        return !allClusters.find(cl => cl.name === c.name);
+                    });
+                }
+            }
+        }
+
+        async function setOwner(index) {
+            const c = clusters[index];
+            const owner = prompt(`Set owner for cluster "${c.name}":`, defaultOwner);
+
+            if (owner === null) return;  // User cancelled
+            if (!owner.trim()) {
+                showMessage('Owner cannot be empty', 'error');
+                return;
+            }
+
+            const location = c.region || c.location;
+            try {
+                const res = await fetch(`/api/${c.provider}/${location}/${c.name}/set-owner`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ owner: owner.trim() })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    showMessage(data.data, 'success');
+                    loadClusters();  // Refresh to show new owner
+                } else {
+                    showMessage('Error: ' + data.error, 'error');
+                }
+            } catch (e) {
+                showMessage('Failed: ' + e.message, 'error');
+            }
+        }
+
+        async function reloadConfig() {
+            try {
+                const res = await fetch('/api/config/reload', { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    showMessage('Config reloaded', 'success');
+                    loadClusters();
+                } else {
+                    showMessage('Error: ' + data.error, 'error');
+                }
+            } catch (e) {
+                showMessage('Failed: ' + e.message, 'error');
+            }
+        }
+
+        // Restore any running operations from server on page load
+        async function restoreOperations() {
+            try {
+                const res = await fetch('/api/operations');
+                const data = await res.json();
+                if (data.success && data.data.length > 0) {
+                    for (const op of data.data) {
+                        if (op.status === 'running' || !op.end_time) {
+                            // Restore this operation
+                            operations[op.id] = {
+                                id: op.id,
+                                clusterName: op.cluster,
+                                action: op.type === 'delete' ? 'Deleting' : op.type,
+                                provider: op.provider,
+                                location: '',
+                                startTime: new Date(op.start_time).getTime(),
+                                status: op.status,
+                                serverId: op.id,
+                                logs: ''
+                            };
+                            // Start polling for this operation
+                            pollServerOperation(op.id);
+                        }
+                    }
+                    updateOperationsPanel();
+                }
+            } catch (e) {
+                console.error('Failed to restore operations:', e);
+            }
+        }
+
+        restoreOperations();
+        loadClusters();
+    </script>
+</body>
+</html>
