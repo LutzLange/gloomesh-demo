@@ -18,7 +18,7 @@ You'll learn how to:
 
 Cluster 1                                                          Cluster 2
 +--------------------------------------------------------------+   +----------------------------+
-| yuh-payments-core ns (ambient + waypoint)                    |   | app ns                     |
+| payments-core ns (ambient + waypoint)                    |   | app ns                     |
 |                                                              |   |                            |
 |  +--------------------------------------------------------+  |   |  +----------------------+  |
 |  | api Service                                            |<-+---+--| frontend (client)    |  |
@@ -60,17 +60,17 @@ Cluster 1                                                          Cluster 2
 
 ## Step 1: Create the Namespace and Backend Services
 
-Create a `yuh-payments-core` namespace with three mock microservices using `httpbin` as the backend.
+Create a `payments-core` namespace with three mock microservices using `httpbin` as the backend.
 
 ```bash
-kubectl create namespace yuh-payments-core
-kubectl label namespace yuh-payments-core istio.io/dataplane-mode=ambient
+kubectl create namespace payments-core
+kubectl label namespace payments-core istio.io/dataplane-mode=ambient
 ```
 
 Deploy three backend services:
 
 ```bash
-kubectl apply -n yuh-payments-core -f - <<'EOF'
+kubectl apply -n payments-core -f - <<'EOF'
 # --- users service ---
 apiVersion: v1
 kind: ServiceAccount
@@ -193,7 +193,7 @@ EOF
 Wait for all pods to be running:
 
 ```bash
-kubectl get pods -n yuh-payments-core -w
+kubectl get pods -n payments-core -w
 ```
 
 ---
@@ -203,7 +203,7 @@ kubectl get pods -n yuh-payments-core -w
 Deploy a namespace-scoped waypoint and enroll the namespace to use it:
 
 ```bash
-kubectl apply -n yuh-payments-core -f - <<'EOF'
+kubectl apply -n payments-core -f - <<'EOF'
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
@@ -217,14 +217,14 @@ spec:
 EOF
 
 # Enroll the namespace to route all service traffic through the waypoint
-kubectl label namespace yuh-payments-core istio.io/use-waypoint=waypoint
+kubectl label namespace payments-core istio.io/use-waypoint=waypoint
 ```
 
 Verify the waypoint is running:
 
 ```bash
-kubectl get pods -n yuh-payments-core -l gateway.networking.k8s.io/gateway-name=waypoint
-kubectl get gateway -n yuh-payments-core waypoint
+kubectl get pods -n payments-core -l gateway.networking.k8s.io/gateway-name=waypoint
+kubectl get gateway -n payments-core waypoint
 ```
 
 Expected output:
@@ -237,10 +237,10 @@ waypoint          istio-waypoint   10.x.x.x      True         10s
 
 ## Step 3: Create the API Entry Point
 
-Create a Kubernetes Service called `api` that selects the waypoint proxy. This Service provides a stable hostname (`api.yuh-payments-core.svc.cluster.local`) that clients can address. The `solo.io/service-scope=global` and `solo.io/service-takeover=true` labels make this Service routable from other clusters in a multicluster ambient mesh.
+Create a Kubernetes Service called `api` that selects the waypoint proxy. This Service provides a stable hostname (`api.payments-core.svc.cluster.local`) that clients can address. The `solo.io/service-scope=global` and `solo.io/service-takeover=true` labels make this Service routable from other clusters in a multicluster ambient mesh.
 
 ```bash
-kubectl apply -n yuh-payments-core -f - <<'EOF'
+kubectl apply -n payments-core -f - <<'EOF'
 apiVersion: v1
 kind: Service
 metadata:
@@ -263,9 +263,9 @@ EOF
 
 ```
 +----------------------------------------------------------------+
-| yuh-payments-core namespace                                    |
+| payments-core namespace                                    |
 |                                                                |
-| api.yuh-payments-core.svc.cluster.local                        |
+| api.payments-core.svc.cluster.local                        |
 | +------------------------------------------------------------+ |
 | | api (Service)                                              | |
 | | selector: gateway-name=waypoint                            | |
@@ -283,7 +283,7 @@ EOF
 ```
 
 This Service is now:
-- **Addressable locally** as `api.yuh-payments-core.svc.cluster.local`
+- **Addressable locally** as `api.payments-core.svc.cluster.local`
 - **Addressable globally** across clusters via the `global` scope
 - **Routed through the waypoint** where HTTPRoute rules are evaluated
 
@@ -294,11 +294,11 @@ The key insight is the selector: `gateway.networking.k8s.io/gateway-name: waypoi
 Verify this:
 
 ```bash
-kubectl get endpoints api -n yuh-payments-core
+kubectl get endpoints api -n payments-core
 # NAME   ENDPOINTS          AGE
 # api    10.244.0.13:80     1m
 
-kubectl get pods -n yuh-payments-core -l gateway.networking.k8s.io/gateway-name=waypoint -o wide
+kubectl get pods -n payments-core -l gateway.networking.k8s.io/gateway-name=waypoint -o wide
 # The pod IP should match the Endpoints IP above
 ```
 
@@ -320,7 +320,7 @@ This is critical because **ztunnel health-checks require healthy endpoints**. If
 Create an HTTPRoute to define path-based routing rules on the waypoint.
 
 ```bash
-kubectl apply -n yuh-payments-core -f - <<'EOF'
+kubectl apply -n payments-core -f - <<'EOF'
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -453,28 +453,28 @@ Wait for the curl pod to be ready, then test:
 
 ```bash
 # Test path-based routing
-kubectl exec -n client deploy/curl -- curl -s http://api.yuh-payments-core.svc.cluster.local/users/get | head -20
-kubectl exec -n client deploy/curl -- curl -s http://api.yuh-payments-core.svc.cluster.local/deposits/get | head -20
-kubectl exec -n client deploy/curl -- curl -s http://api.yuh-payments-core.svc.cluster.local/savings/get | head -20
+kubectl exec -n client deploy/curl -- curl -s http://api.payments-core.svc.cluster.local/users/get | head -20
+kubectl exec -n client deploy/curl -- curl -s http://api.payments-core.svc.cluster.local/deposits/get | head -20
+kubectl exec -n client deploy/curl -- curl -s http://api.payments-core.svc.cluster.local/savings/get | head -20
 ```
 
 Check the `X-Backend` response header to confirm each path routes to the correct service:
 
 ```bash
-kubectl exec -n client deploy/curl -- curl -sI http://api.yuh-payments-core.svc.cluster.local/users/get 2>&1 | grep -i x-backend
+kubectl exec -n client deploy/curl -- curl -sI http://api.payments-core.svc.cluster.local/users/get 2>&1 | grep -i x-backend
 # Expected: X-Backend: users
 
-kubectl exec -n client deploy/curl -- curl -sI http://api.yuh-payments-core.svc.cluster.local/deposits/get 2>&1 | grep -i x-backend
+kubectl exec -n client deploy/curl -- curl -sI http://api.payments-core.svc.cluster.local/deposits/get 2>&1 | grep -i x-backend
 # Expected: X-Backend: deposits
 
-kubectl exec -n client deploy/curl -- curl -sI http://api.yuh-payments-core.svc.cluster.local/savings/get 2>&1 | grep -i x-backend
+kubectl exec -n client deploy/curl -- curl -sI http://api.payments-core.svc.cluster.local/savings/get 2>&1 | grep -i x-backend
 # Expected: X-Backend: savings
 ```
 
 Verify traffic is flowing through the waypoint by checking its access logs:
 
 ```bash
-kubectl logs -n yuh-payments-core -l gateway.networking.k8s.io/gateway-name=waypoint --tail=10
+kubectl logs -n payments-core -l gateway.networking.k8s.io/gateway-name=waypoint --tail=10
 ```
 
 ### Authorization Policies at the Waypoint
@@ -491,7 +491,7 @@ With waypoints in ambient mode, the same two-level pattern applies. Authorizatio
 Create an AuthorizationPolicy that only allows the `curl` ServiceAccount from the `client` namespace to call the `api` Service. This policy is evaluated at the waypoint:
 
 ```bash
-kubectl apply -n yuh-payments-core -f - <<'EOF'
+kubectl apply -n payments-core -f - <<'EOF'
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
@@ -513,7 +513,7 @@ EOF
 Test from the allowed client — should succeed:
 
 ```bash
-kubectl exec -n client deploy/curl -- curl -sI http://api.yuh-payments-core.svc.cluster.local/users/get 2>&1 | grep -iE "HTTP"
+kubectl exec -n client deploy/curl -- curl -sI http://api.payments-core.svc.cluster.local/users/get 2>&1 | grep -iE "HTTP"
 # Expected: HTTP/1.1 200 OK
 ```
 
@@ -551,7 +551,7 @@ kubectl rollout status deployment -n client unauthorized-curl --timeout=60s
 ```
 
 ```bash
-kubectl exec -n client deploy/unauthorized-curl -- curl -sI http://api.yuh-payments-core.svc.cluster.local/users/get 2>&1 | grep -iE "HTTP"
+kubectl exec -n client deploy/unauthorized-curl -- curl -sI http://api.payments-core.svc.cluster.local/users/get 2>&1 | grep -iE "HTTP"
 # Expected: HTTP/1.1 403 Forbidden (RBAC: access denied)
 ```
 
@@ -566,7 +566,7 @@ In the sidecar model, a second AuthorizationPolicy on the backend sidecar ensure
 Apply the AuthorizationPolicy:
 
 ```bash
-kubectl apply -n yuh-payments-core -f - <<'EOF'
+kubectl apply -n payments-core -f - <<'EOF'
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
@@ -587,14 +587,14 @@ spec:
   - from:
     - source:
         principals:
-        - "cluster.local/ns/yuh-payments-core/sa/waypoint"
+        - "cluster.local/ns/payments-core/sa/waypoint"
 EOF
 ```
 
 Verify the policy is accepted (not invalid):
 
 ```bash
-kubectl get authorizationpolicy backends-via-waypoint-only -n yuh-payments-core \
+kubectl get authorizationpolicy backends-via-waypoint-only -n payments-core \
   -o jsonpath='{.status.conditions[0].reason}'
 # Expected: Accepted
 ```
@@ -602,14 +602,14 @@ kubectl get authorizationpolicy backends-via-waypoint-only -n yuh-payments-core 
 Verify: traffic through the API gateway (waypoint) still works:
 
 ```bash
-kubectl exec -n client deploy/curl -- curl -sI http://api.yuh-payments-core.svc.cluster.local/users/get 2>&1 | grep -iE "HTTP"
+kubectl exec -n client deploy/curl -- curl -sI http://api.payments-core.svc.cluster.local/users/get 2>&1 | grep -iE "HTTP"
 # Expected: HTTP/1.1 200 OK (waypoint identity is allowed)
 ```
 
 Direct access to backend services (bypassing the waypoint) is denied:
 
 ```bash
-kubectl exec -n client deploy/curl -- curl -sI http://users.yuh-payments-core.svc.cluster.local:8080/get 2>&1 | grep -iE "HTTP"
+kubectl exec -n client deploy/curl -- curl -sI http://users.payments-core.svc.cluster.local:8080/get 2>&1 | grep -iE "HTTP"
 # Expected: HTTP/1.1 403 Forbidden (client identity is not the waypoint)
 ```
 
@@ -631,7 +631,7 @@ Client (curl SA)                          Backend (users)
 Remove the policies and unauthorized client before continuing:
 
 ```bash
-kubectl delete authorizationpolicy api-authz backends-via-waypoint-only -n yuh-payments-core
+kubectl delete authorizationpolicy api-authz backends-via-waypoint-only -n payments-core
 kubectl delete deploy unauthorized-curl -n client
 kubectl delete sa unauthorized-client -n client
 ```
@@ -645,19 +645,19 @@ HTTPRoute is the Kubernetes Gateway API native approach, but you can also use Is
 Remove the HTTPRoute and replace it with a VirtualService:
 
 ```bash
-kubectl delete httproute api-routes -n yuh-payments-core
+kubectl delete httproute api-routes -n payments-core
 ```
 
 ```bash
-kubectl apply -n yuh-payments-core -f - <<'EOF'
+kubectl apply -n payments-core -f - <<'EOF'
 apiVersion: networking.istio.io/v1beta1
 kind: VirtualService
 metadata:
   name: api-routes
-  namespace: yuh-payments-core
+  namespace: payments-core
 spec:
   hosts:
-    - api.yuh-payments-core.svc.cluster.local
+    - api.payments-core.svc.cluster.local
   http:
     - match:
         - uri:
@@ -673,7 +673,7 @@ spec:
           rewrite: /\2
       route:
         - destination:
-            host: users.yuh-payments-core.svc.cluster.local
+            host: users.payments-core.svc.cluster.local
             port:
               number: 8080
       retries:
@@ -695,7 +695,7 @@ spec:
           rewrite: /\2
       route:
         - destination:
-            host: deposits.yuh-payments-core.svc.cluster.local
+            host: deposits.payments-core.svc.cluster.local
             port:
               number: 8080
       retries:
@@ -717,7 +717,7 @@ spec:
           rewrite: /\2
       route:
         - destination:
-            host: savings.yuh-payments-core.svc.cluster.local
+            host: savings.payments-core.svc.cluster.local
             port:
               number: 8080
       retries:
@@ -731,17 +731,17 @@ EOF
 Test that routing still works:
 
 ```bash
-kubectl exec -n client deploy/curl -- curl -sI http://api.yuh-payments-core.svc.cluster.local/users/get 2>&1 | grep -iE "HTTP|x-backend"
+kubectl exec -n client deploy/curl -- curl -sI http://api.payments-core.svc.cluster.local/users/get 2>&1 | grep -iE "HTTP|x-backend"
 # Expected:
 # HTTP/1.1 200 OK
 # x-backend: users
 
-kubectl exec -n client deploy/curl -- curl -sI http://api.yuh-payments-core.svc.cluster.local/deposits/get 2>&1 | grep -iE "HTTP|x-backend"
+kubectl exec -n client deploy/curl -- curl -sI http://api.payments-core.svc.cluster.local/deposits/get 2>&1 | grep -iE "HTTP|x-backend"
 # Expected:
 # HTTP/1.1 200 OK
 # x-backend: deposits
 
-kubectl exec -n client deploy/curl -- curl -sI http://api.yuh-payments-core.svc.cluster.local/savings/get 2>&1 | grep -iE "HTTP|x-backend"
+kubectl exec -n client deploy/curl -- curl -sI http://api.payments-core.svc.cluster.local/savings/get 2>&1 | grep -iE "HTTP|x-backend"
 # Expected:
 # HTTP/1.1 200 OK
 # x-backend: savings
@@ -759,33 +759,33 @@ First, remove the ambient label, waypoint, and api Service to simulate a pre-mig
 
 ```bash
 # Remove ambient mode and waypoint enrollment
-kubectl label namespace yuh-payments-core istio.io/dataplane-mode-
-kubectl label namespace yuh-payments-core istio.io/use-waypoint-
+kubectl label namespace payments-core istio.io/dataplane-mode-
+kubectl label namespace payments-core istio.io/use-waypoint-
 
 # Remove the waypoint, api Service, and any routing/canary resources
-kubectl delete gateway waypoint -n yuh-payments-core 2>/dev/null
-kubectl delete svc api -n yuh-payments-core 2>/dev/null
-kubectl delete httproute api-routes -n yuh-payments-core 2>/dev/null
-kubectl delete vs api-routes api-routes-parent users-routes deposits-routes savings-routes -n yuh-payments-core 2>/dev/null
-kubectl delete dr users deposits -n yuh-payments-core 2>/dev/null
-kubectl delete deploy users-canary deposits-canary -n yuh-payments-core 2>/dev/null
-kubectl delete sa users-canary deposits-canary -n yuh-payments-core 2>/dev/null
+kubectl delete gateway waypoint -n payments-core 2>/dev/null
+kubectl delete svc api -n payments-core 2>/dev/null
+kubectl delete httproute api-routes -n payments-core 2>/dev/null
+kubectl delete vs api-routes api-routes-parent users-routes deposits-routes savings-routes -n payments-core 2>/dev/null
+kubectl delete dr users deposits -n payments-core 2>/dev/null
+kubectl delete deploy users-canary deposits-canary -n payments-core 2>/dev/null
+kubectl delete sa users-canary deposits-canary -n payments-core 2>/dev/null
 
 # Enable sidecar injection
-kubectl label namespace yuh-payments-core istio-injection=enabled
+kubectl label namespace payments-core istio-injection=enabled
 ```
 
 Restart all backend pods to get sidecars injected:
 
 ```bash
-kubectl rollout restart deployment -n yuh-payments-core users deposits savings
-kubectl rollout status deployment -n yuh-payments-core users deposits savings --timeout=90s
+kubectl rollout restart deployment -n payments-core users deposits savings
+kubectl rollout status deployment -n payments-core users deposits savings --timeout=90s
 ```
 
 Verify pods now show **2/2 READY** (application container + sidecar):
 
 ```bash
-kubectl get pods -n yuh-payments-core
+kubectl get pods -n payments-core
 # NAME                       READY   STATUS    RESTARTS   AGE
 # deposits-...               2/2     Running   0          12s
 # savings-...                2/2     Running   0          12s
@@ -795,9 +795,9 @@ kubectl get pods -n yuh-payments-core
 Test direct service access (no api gateway yet, sidecars handle mTLS):
 
 ```bash
-kubectl exec -n client deploy/curl -- curl -s http://users.yuh-payments-core.svc.cluster.local:8080/get -o /dev/null -w "users: HTTP %{http_code}\n"
-kubectl exec -n client deploy/curl -- curl -s http://deposits.yuh-payments-core.svc.cluster.local:8080/get -o /dev/null -w "deposits: HTTP %{http_code}\n"
-kubectl exec -n client deploy/curl -- curl -s http://savings.yuh-payments-core.svc.cluster.local:8080/get -o /dev/null -w "savings: HTTP %{http_code}\n"
+kubectl exec -n client deploy/curl -- curl -s http://users.payments-core.svc.cluster.local:8080/get -o /dev/null -w "users: HTTP %{http_code}\n"
+kubectl exec -n client deploy/curl -- curl -s http://deposits.payments-core.svc.cluster.local:8080/get -o /dev/null -w "deposits: HTTP %{http_code}\n"
+kubectl exec -n client deploy/curl -- curl -s http://savings.payments-core.svc.cluster.local:8080/get -o /dev/null -w "savings: HTTP %{http_code}\n"
 # All should return HTTP 200
 ```
 
@@ -807,7 +807,7 @@ This is the key migration phase. Deploy the waypoint and api Service while sidec
 
 ```bash
 # Deploy the waypoint Gateway
-kubectl apply -n yuh-payments-core -f - <<'EOF'
+kubectl apply -n payments-core -f - <<'EOF'
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
@@ -820,16 +820,16 @@ spec:
     protocol: HBONE
 EOF
 
-kubectl wait --for=condition=Programmed gateway/waypoint -n yuh-payments-core --timeout=60s
+kubectl wait --for=condition=Programmed gateway/waypoint -n payments-core --timeout=60s
 
 # Enroll the namespace to route service traffic through the waypoint
-kubectl label namespace yuh-payments-core istio.io/use-waypoint=waypoint
+kubectl label namespace payments-core istio.io/use-waypoint=waypoint
 ```
 
 Create the api Service:
 
 ```bash
-kubectl apply -n yuh-payments-core -f - <<'EOF'
+kubectl apply -n payments-core -f - <<'EOF'
 apiVersion: v1
 kind: Service
 metadata:
@@ -854,11 +854,11 @@ Deploy canary versions of the backends and add `version: stable` labels to exist
 
 ```bash
 # Add version: stable labels to existing deployments
-kubectl patch deployment users -n yuh-payments-core --type merge -p '{"spec":{"template":{"metadata":{"labels":{"version":"stable"}}}}}'
-kubectl patch deployment deposits -n yuh-payments-core --type merge -p '{"spec":{"template":{"metadata":{"labels":{"version":"stable"}}}}}'
+kubectl patch deployment users -n payments-core --type merge -p '{"spec":{"template":{"metadata":{"labels":{"version":"stable"}}}}}'
+kubectl patch deployment deposits -n payments-core --type merge -p '{"spec":{"template":{"metadata":{"labels":{"version":"stable"}}}}}'
 
 # Deploy canary versions (will get sidecars from istio-injection=enabled)
-kubectl apply -n yuh-payments-core -f - <<'EOF'
+kubectl apply -n payments-core -f - <<'EOF'
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -922,19 +922,19 @@ spec:
           value: "deposits-canary:8080"
 EOF
 
-kubectl rollout status deployment -n yuh-payments-core users-canary deposits-canary --timeout=90s
+kubectl rollout status deployment -n payments-core users-canary deposits-canary --timeout=90s
 ```
 
 Create DestinationRules for stable/canary subsets:
 
 ```bash
-kubectl apply -n yuh-payments-core -f - <<'EOF'
+kubectl apply -n payments-core -f - <<'EOF'
 apiVersion: networking.istio.io/v1beta1
 kind: DestinationRule
 metadata:
   name: users
 spec:
-  host: users.yuh-payments-core.svc.cluster.local
+  host: users.payments-core.svc.cluster.local
   subsets:
   - name: stable
     labels:
@@ -948,7 +948,7 @@ kind: DestinationRule
 metadata:
   name: deposits
 spec:
-  host: deposits.yuh-payments-core.svc.cluster.local
+  host: deposits.payments-core.svc.cluster.local
   subsets:
   - name: stable
     labels:
@@ -962,7 +962,7 @@ EOF
 Apply the **delegation chain** — parent VS (traffic management team) delegates to child VSes (developer / Argo Rollout managed):
 
 ```bash
-kubectl apply -n yuh-payments-core -f - <<'EOF'
+kubectl apply -n payments-core -f - <<'EOF'
 # --- Parent VS (traffic management team) ---
 apiVersion: networking.istio.io/v1beta1
 kind: VirtualService
@@ -970,7 +970,7 @@ metadata:
   name: api-routes-parent
 spec:
   hosts:
-    - api.yuh-payments-core.svc.cluster.local
+    - api.payments-core.svc.cluster.local
   http:
     - name: users-delegation
       match:
@@ -978,21 +978,21 @@ spec:
             prefix: /users
       delegate:
         name: users-routes
-        namespace: yuh-payments-core
+        namespace: payments-core
     - name: deposits-delegation
       match:
         - uri:
             prefix: /deposits
       delegate:
         name: deposits-routes
-        namespace: yuh-payments-core
+        namespace: payments-core
     - name: savings-delegation
       match:
         - uri:
             prefix: /savings
       delegate:
         name: savings-routes
-        namespace: yuh-payments-core
+        namespace: payments-core
 ---
 # --- Child VSes (developer / Argo Rollout managed) ---
 apiVersion: networking.istio.io/v1beta1
@@ -1013,13 +1013,13 @@ spec:
             X-Delegation: "child-vs"
       route:
         - destination:
-            host: users.yuh-payments-core.svc.cluster.local
+            host: users.payments-core.svc.cluster.local
             port:
               number: 8080
             subset: stable
           weight: 100
         - destination:
-            host: users.yuh-payments-core.svc.cluster.local
+            host: users.payments-core.svc.cluster.local
             port:
               number: 8080
             subset: canary
@@ -1047,13 +1047,13 @@ spec:
             X-Delegation: "child-vs"
       route:
         - destination:
-            host: deposits.yuh-payments-core.svc.cluster.local
+            host: deposits.payments-core.svc.cluster.local
             port:
               number: 8080
             subset: stable
           weight: 100
         - destination:
-            host: deposits.yuh-payments-core.svc.cluster.local
+            host: deposits.payments-core.svc.cluster.local
             port:
               number: 8080
             subset: canary
@@ -1081,7 +1081,7 @@ spec:
             X-Delegation: "child-vs"
       route:
         - destination:
-            host: savings.yuh-payments-core.svc.cluster.local
+            host: savings.payments-core.svc.cluster.local
             port:
               number: 8080
           weight: 100
@@ -1095,7 +1095,7 @@ EOF
 Verify: backends still show 2/2 (sidecars), canary pods also 2/2, waypoint is 1/1:
 
 ```bash
-kubectl get pods -n yuh-payments-core
+kubectl get pods -n payments-core
 # NAME                        READY   STATUS    RESTARTS   AGE
 # deposits-...                2/2     Running   0          45s
 # deposits-canary-...         2/2     Running   0          20s
@@ -1108,17 +1108,17 @@ kubectl get pods -n yuh-payments-core
 Test routing through the waypoint with sidecar backends — note the `X-Delegation: child-vs` header confirming the delegation chain works:
 
 ```bash
-kubectl exec -n client deploy/curl -- curl -sI http://api.yuh-payments-core.svc.cluster.local/users/get 2>&1 | grep -iE "HTTP|x-backend|x-delegation"
+kubectl exec -n client deploy/curl -- curl -sI http://api.payments-core.svc.cluster.local/users/get 2>&1 | grep -iE "HTTP|x-backend|x-delegation"
 # HTTP/1.1 200 OK
 # x-backend: users
 # x-delegation: child-vs
 
-kubectl exec -n client deploy/curl -- curl -sI http://api.yuh-payments-core.svc.cluster.local/deposits/get 2>&1 | grep -iE "HTTP|x-backend|x-delegation"
+kubectl exec -n client deploy/curl -- curl -sI http://api.payments-core.svc.cluster.local/deposits/get 2>&1 | grep -iE "HTTP|x-backend|x-delegation"
 # HTTP/1.1 200 OK
 # x-backend: deposits
 # x-delegation: child-vs
 
-kubectl exec -n client deploy/curl -- curl -sI http://api.yuh-payments-core.svc.cluster.local/savings/get 2>&1 | grep -iE "HTTP|x-backend|x-delegation"
+kubectl exec -n client deploy/curl -- curl -sI http://api.payments-core.svc.cluster.local/savings/get 2>&1 | grep -iE "HTTP|x-backend|x-delegation"
 # HTTP/1.1 200 OK
 # x-backend: savings
 # x-delegation: child-vs
@@ -1134,14 +1134,14 @@ Following [Solo's migration pattern](https://github.com/ably77/solo-enterprise-f
 
 ```bash
 # 1. Remove sidecar injection
-kubectl label namespace yuh-payments-core istio-injection-
+kubectl label namespace payments-core istio-injection-
 
 # 2. Enable ambient mode
-kubectl label namespace yuh-payments-core istio.io/dataplane-mode=ambient
+kubectl label namespace payments-core istio.io/dataplane-mode=ambient
 
 # 3. Restart pods to drop sidecars
-kubectl rollout restart deployment -n yuh-payments-core users deposits savings users-canary deposits-canary
-kubectl rollout status deployment -n yuh-payments-core users deposits savings users-canary deposits-canary --timeout=90s
+kubectl rollout restart deployment -n payments-core users deposits savings users-canary deposits-canary
+kubectl rollout status deployment -n payments-core users deposits savings users-canary deposits-canary --timeout=90s
 ```
 
 > **Why the restart?** This restart is needed **only because we're migrating FROM sidecars**. Enrolling a fresh namespace into ambient mode does NOT require pod restarts — ztunnel enrolls pods live via CNI iptables redirection.
@@ -1153,7 +1153,7 @@ kubectl rollout status deployment -n yuh-payments-core users deposits savings us
 Verify pods now show **1/1 READY** (no more sidecars):
 
 ```bash
-kubectl get pods -n yuh-payments-core
+kubectl get pods -n payments-core
 # NAME                        READY   STATUS    RESTARTS   AGE
 # deposits-...                1/1     Running   0          14s
 # deposits-canary-...         1/1     Running   0          14s
@@ -1168,17 +1168,17 @@ kubectl get pods -n yuh-payments-core
 **Path-based routing** — all three paths still work through the waypoint:
 
 ```bash
-kubectl exec -n client deploy/curl -- curl -sI http://api.yuh-payments-core.svc.cluster.local/users/get 2>&1 | grep -iE "HTTP|x-backend|x-delegation"
+kubectl exec -n client deploy/curl -- curl -sI http://api.payments-core.svc.cluster.local/users/get 2>&1 | grep -iE "HTTP|x-backend|x-delegation"
 # HTTP/1.1 200 OK
 # x-backend: users
 # x-delegation: child-vs
 
-kubectl exec -n client deploy/curl -- curl -sI http://api.yuh-payments-core.svc.cluster.local/deposits/get 2>&1 | grep -iE "HTTP|x-backend|x-delegation"
+kubectl exec -n client deploy/curl -- curl -sI http://api.payments-core.svc.cluster.local/deposits/get 2>&1 | grep -iE "HTTP|x-backend|x-delegation"
 # HTTP/1.1 200 OK
 # x-backend: deposits
 # x-delegation: child-vs
 
-kubectl exec -n client deploy/curl -- curl -sI http://api.yuh-payments-core.svc.cluster.local/savings/get 2>&1 | grep -iE "HTTP|x-backend|x-delegation"
+kubectl exec -n client deploy/curl -- curl -sI http://api.payments-core.svc.cluster.local/savings/get 2>&1 | grep -iE "HTTP|x-backend|x-delegation"
 # HTTP/1.1 200 OK
 # x-backend: savings
 # x-delegation: child-vs
@@ -1189,7 +1189,7 @@ The `X-Delegation: child-vs` header confirms **VS delegation works after migrati
 **Canary weight splitting** — update the child VS to send 50% traffic to canary, verify it takes effect immediately:
 
 ```bash
-kubectl patch vs users-routes -n yuh-payments-core --type merge -p '
+kubectl patch vs users-routes -n payments-core --type merge -p '
 spec:
   http:
   - name: users-primary
@@ -1204,13 +1204,13 @@ spec:
           X-Delegation: child-vs
     route:
     - destination:
-        host: users.yuh-payments-core.svc.cluster.local
+        host: users.payments-core.svc.cluster.local
         port:
           number: 8080
         subset: stable
       weight: 50
     - destination:
-        host: users.yuh-payments-core.svc.cluster.local
+        host: users.payments-core.svc.cluster.local
         port:
           number: 8080
         subset: canary
@@ -1222,14 +1222,14 @@ spec:
 
 # Send 10 requests — expect a mix of stable and canary
 for i in $(seq 1 10); do
-  kubectl exec -n client deploy/curl -- curl -s http://api.yuh-payments-core.svc.cluster.local/users/get 2>&1 | grep -o '"Host": "[^"]*"'
+  kubectl exec -n client deploy/curl -- curl -s http://api.payments-core.svc.cluster.local/users/get 2>&1 | grep -o '"Host": "[^"]*"'
 done
 ```
 
 **Header-based preview routing** — add a canary preview rule, then reset to 100% stable:
 
 ```bash
-kubectl apply -n yuh-payments-core -f - <<'EOF'
+kubectl apply -n payments-core -f - <<'EOF'
 apiVersion: networking.istio.io/v1beta1
 kind: VirtualService
 metadata:
@@ -1252,7 +1252,7 @@ spec:
             X-Delegation: "child-vs"
       route:
         - destination:
-            host: users.yuh-payments-core.svc.cluster.local
+            host: users.payments-core.svc.cluster.local
             port:
               number: 8080
             subset: canary
@@ -1269,7 +1269,7 @@ spec:
             X-Delegation: "child-vs"
       route:
         - destination:
-            host: users.yuh-payments-core.svc.cluster.local
+            host: users.payments-core.svc.cluster.local
             port:
               number: 8080
             subset: stable
@@ -1281,18 +1281,18 @@ spec:
 EOF
 
 # Without header → stable
-kubectl exec -n client deploy/curl -- curl -sI http://api.yuh-payments-core.svc.cluster.local/users/get 2>&1 | grep -iE "x-backend"
+kubectl exec -n client deploy/curl -- curl -sI http://api.payments-core.svc.cluster.local/users/get 2>&1 | grep -iE "x-backend"
 # x-backend: users
 
 # With canary header → canary
-kubectl exec -n client deploy/curl -- curl -sI -H "X-Canary: true" http://api.yuh-payments-core.svc.cluster.local/users/get 2>&1 | grep -iE "x-backend"
+kubectl exec -n client deploy/curl -- curl -sI -H "X-Canary: true" http://api.payments-core.svc.cluster.local/users/get 2>&1 | grep -iE "x-backend"
 # x-backend: users-canary
 ```
 
 Reset the child VS to 100% stable for subsequent steps:
 
 ```bash
-kubectl apply -n yuh-payments-core -f - <<'EOF'
+kubectl apply -n payments-core -f - <<'EOF'
 apiVersion: networking.istio.io/v1beta1
 kind: VirtualService
 metadata:
@@ -1311,13 +1311,13 @@ spec:
             X-Delegation: "child-vs"
       route:
         - destination:
-            host: users.yuh-payments-core.svc.cluster.local
+            host: users.payments-core.svc.cluster.local
             port:
               number: 8080
             subset: stable
           weight: 100
         - destination:
-            host: users.yuh-payments-core.svc.cluster.local
+            host: users.payments-core.svc.cluster.local
             port:
               number: 8080
             subset: canary
@@ -1373,10 +1373,10 @@ Both sidecars and waypoints share the same route building code path (`httproute.
 
 ```
 +------------------------------------------------------------------+
-| yuh-payments-core namespace                                      |
+| payments-core namespace                                      |
 |                                                                  |
 |  Parent VS (traffic mgmt team)                                  |
-|  hosts: [api.yuh-payments-core.svc.cluster.local]               |
+|  hosts: [api.payments-core.svc.cluster.local]               |
 |  +---------+-------------+-------------+                        |
 |  | /users  | /deposits   | /savings    |  ← path matching       |
 |  |delegate:|  delegate:  |  delegate:  |  ← delegates to child  |
@@ -1408,7 +1408,7 @@ You can inspect the merged VirtualService as seen by istiod using `istioctl prox
 
 ```bash
 # Check the routes configured on the waypoint
-istioctl proxy-config routes -n yuh-payments-core deploy/waypoint -o json | \
+istioctl proxy-config routes -n payments-core deploy/waypoint -o json | \
   jq '.[].virtualHosts[] | select(.name | contains("api")) | .routes[] | {name: .name, match: .match, route: .route}'
 ```
 
@@ -1663,10 +1663,10 @@ Deploy the full workshop setup on cluster 1 (Steps 1-7). Then on cluster 2, crea
 
 ```bash
 # Cluster 2: create namespace and api Service stub
-kubectl create namespace yuh-payments-core --context $KUBECONTEXT_CLUSTER2
-kubectl label namespace yuh-payments-core istio.io/dataplane-mode=ambient --context $KUBECONTEXT_CLUSTER2
+kubectl create namespace payments-core --context $KUBECONTEXT_CLUSTER2
+kubectl label namespace payments-core istio.io/dataplane-mode=ambient --context $KUBECONTEXT_CLUSTER2
 
-kubectl apply --context $KUBECONTEXT_CLUSTER2 -n yuh-payments-core -f - <<'EOF'
+kubectl apply --context $KUBECONTEXT_CLUSTER2 -n payments-core -f - <<'EOF'
 apiVersion: v1
 kind: Service
 metadata:
@@ -1720,7 +1720,7 @@ Test cross-cluster routing:
 
 ```bash
 kubectl --context $KUBECONTEXT_CLUSTER2 exec -n client deploy/curl -- \
-  curl -sI http://api.yuh-payments-core.svc.cluster.local/users/get 2>&1 | grep -iE "HTTP|x-backend|x-delegation"
+  curl -sI http://api.payments-core.svc.cluster.local/users/get 2>&1 | grep -iE "HTTP|x-backend|x-delegation"
 # Expected:
 # HTTP/1.1 200 OK
 # x-backend: users
@@ -1735,7 +1735,7 @@ Traffic flows: cluster2 ztunnel -> cluster2 e/w gateway -> cluster1 e/w gateway 
 
 ### Q1: How does a VirtualService bind to a waypoint?
 
-**Answer:** Via the `hosts` field matching the service hostname. No `gateways` field is needed. When the waypoint handles traffic for `api.yuh-payments-core.svc.cluster.local`, it selects VirtualServices whose `hosts` match that hostname. The function `getVirtualServiceForWaypoint()` in `listener_waypoint.go` performs this matching.
+**Answer:** Via the `hosts` field matching the service hostname. No `gateways` field is needed. When the waypoint handles traffic for `api.payments-core.svc.cluster.local`, it selects VirtualServices whose `hosts` match that hostname. The function `getVirtualServiceForWaypoint()` in `listener_waypoint.go` performs this matching.
 
 This is different from the sidecar model where VS binds to a `networking.istio.io/Gateway` via the `gateways` field. At a waypoint, the binding is implicit through host matching.
 
@@ -1805,7 +1805,7 @@ The `targetRefs` field on AuthorizationPolicy controls where the policy is enfor
 
 ```bash
 # Single cluster
-kubectl delete namespace yuh-payments-core
+kubectl delete namespace payments-core
 kubectl delete namespace client
 
 # Multi-cluster (if Step 9 was run)
