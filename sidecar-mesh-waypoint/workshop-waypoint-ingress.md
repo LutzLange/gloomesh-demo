@@ -23,7 +23,7 @@ Cluster 1                                                          Cluster 2
 |  +--------------------------------------------------------+  |   |  +----------------------+  |
 |  | api Service                                            |<-+---+--| frontend (client)    |  |
 |  | selector: gateway-name=waypoint                        |  |   |  +----------------------+  |
-|  | solo.io/service-scope: global                          |  |   |    curl http://api.yuh-    |
+|  | solo.io/service-scope: global                          |  |   |    curl http://api.    F    |
 |  | solo.io/service-takeover: true                         |  |   |    payments-core.svc.      |
 |  |                                                        |  |   |    cluster.local/users/get |
 |  +---------------------------+----------------------------+  |   +----------------------------+
